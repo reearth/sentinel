@@ -1,0 +1,27 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "outDir": "./dist",
+    "rootDir": "./src",
+    "declaration": true,
+    "declarationMap": true,
+    "sourceMap": true,
+    "module": "ESNext",
+    "target": "ES2020",
+    "lib": ["ES2020", "DOM", "WebWorker"],
+    "skipLibCheck": true
+  },
+  "include": [
+    "src/index.ts",
+    "src/register.ts",
+    "src/client.ts",
+    "src/public-types.ts",
+    "src/types.ts"
+  ],
+  "exclude": [
+    "src/sw.ts",
+    "test",
+    "node_modules",
+    "dist"
+  ]
+}
