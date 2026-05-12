@@ -1,0 +1,43 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+jobs:
+  npm:
+    name: npm publish
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    environment: npm-publish # gates publish on required reviewer approval
+    permissions:
+      contents: read
+      id-token: write # for npm provenance and trusted publishing
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          # npm Trusted Publishing requires Node >=22.14 and npm >=11.5.1.
+          # Node 22 still ships with npm 10.x, so we upgrade npm below.
+          node-version: "22"
+          registry-url: "https://registry.npmjs.org"
+      - name: Activate npm version pinned in package.json (via corepack)
+        # `packageManager: "npm@X.Y.Z"` in package.json is the source of
+        # truth; corepack installs that exact version. This keeps the local
+        # dev npm and the CI npm in lockstep, and ensures the >=11.5.1 that
+        # npm Trusted Publishing requires.
+        run: |
+          # `corepack enable` alone only shims yarn/pnpm; npm needs to be
+          # opted-in explicitly, otherwise the system npm (10.x on Node 22)
+          # stays on PATH and Trusted Publishing fails with a 404.
+          corepack enable npm
+          corepack prepare --activate
+          npm --version
+      - run: npm ci || npm install
+      - name: Sync version from tag
+        run: npm version --no-git-tag-version --allow-same-version "${GITHUB_REF_NAME#v}"
+      - run: npm publish --provenance --access public

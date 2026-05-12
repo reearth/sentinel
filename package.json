@@ -25,10 +25,11 @@
     "build:sw": "vite build",
     "preview": "vite preview",
     "type-check": "tsc --noEmit",
-    "test": "vitest",
+    "test": "vitest run",
+    "test:watch": "vitest",
     "test:ui": "vitest --ui",
     "clean": "rm -rf dist",
-    "prepublishOnly": "npm run clean && npm run build"
+    "prepublishOnly": "npm run type-check && npm test && npm run clean && npm run build"
   },
   "keywords": [
     "service-worker",
@@ -42,8 +43,10 @@
   ],
   "repository": {
     "type": "git",
-    "url": "https://github.com/reearth/sentinel.git"
+    "url": "git+https://github.com/reearth/sentinel.git"
   },
+  "homepage": "https://github.com/reearth/sentinel#readme",
+  "bugs": "https://github.com/reearth/sentinel/issues",
   "author": "Re:Earth Contributors",
   "license": "Apache-2.0",
   "devDependencies": {
@@ -59,5 +62,6 @@
   "peerDependencies": {},
   "publishConfig": {
     "access": "public"
-  }
+  },
+  "packageManager": "npm@11.14.1"
 }
