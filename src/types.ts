@@ -58,6 +58,7 @@ export interface ServiceWorkerConfig {
       documents: CacheStrategy;
     };
   };
+  debug: boolean;
   extractAssetId?: (url: URL) => string | null;
 }
 

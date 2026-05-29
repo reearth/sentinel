@@ -1,5 +1,12 @@
 import type { RequestInterceptor as IRequestInterceptor } from './types';
-import { isProtectedDomain, getAssetType, extractAssetUUID, getCacheName } from './config';
+import {
+  debugError,
+  debugLog,
+  isProtectedDomain,
+  getAssetType,
+  extractAssetUUID,
+  getCacheName,
+} from './config';
 import { tokenManager } from './token-manager';
 
 export class RequestInterceptor implements IRequestInterceptor {
@@ -31,7 +38,7 @@ export class RequestInterceptor implements IRequestInterceptor {
     const headers = new Headers(request.headers);
     headers.set('Authorization', `Bearer ${token}`);
 
-    console.log('[RequestInterceptor] Adding Authorization header:', `Bearer ${token.substring(0, 20)}...`);
+    debugLog('[RequestInterceptor] Adding Authorization header:', `Bearer ${token.substring(0, 20)}...`);
 
     return new Request(request.url, {
       method: request.method,
@@ -51,13 +58,13 @@ export class RequestInterceptor implements IRequestInterceptor {
    * Handle authentication errors (401/403)
    */
   async handleAuthError(request: Request): Promise<Response> {
-    console.log('[RequestInterceptor] Handling auth error, attempting token refresh...');
+    debugLog('[RequestInterceptor] Handling auth error, attempting token refresh...');
 
     // Try to refresh token
     const newToken = await tokenManager.refreshToken();
 
     if (!newToken) {
-      console.log('[RequestInterceptor] Token refresh failed');
+      debugLog('[RequestInterceptor] Token refresh failed');
       return new Response('Authentication failed', {
         status: 401,
         statusText: 'Unauthorized',
@@ -68,7 +75,7 @@ export class RequestInterceptor implements IRequestInterceptor {
     }
 
     // Retry request with new token
-    console.log('[RequestInterceptor] Retrying request with refreshed token');
+    debugLog('[RequestInterceptor] Retrying request with refreshed token');
     const authenticatedRequest = this.addAuthentication(request, newToken);
 
     try {
@@ -85,7 +92,7 @@ export class RequestInterceptor implements IRequestInterceptor {
 
       return response;
     } catch (error) {
-      console.error('[RequestInterceptor] Error retrying request:', error);
+      debugError('[RequestInterceptor] Error retrying request:', error);
       return new Response('Network error', {
         status: 503,
         statusText: 'Service Unavailable',
@@ -101,7 +108,7 @@ export class RequestInterceptor implements IRequestInterceptor {
     const assetType = getAssetType(url);
     const assetId = extractAssetUUID(url);
 
-    console.log(`[RequestInterceptor] Processing ${assetType} request:`, {
+    debugLog(`[RequestInterceptor] Processing ${assetType} request:`, {
       url: url.pathname,
       assetId,
       assetType,
@@ -111,7 +118,7 @@ export class RequestInterceptor implements IRequestInterceptor {
     const token = await tokenManager.getToken();
 
     if (!token) {
-      console.log('[RequestInterceptor] No token available');
+      debugLog('[RequestInterceptor] No token available');
       // For public assets, try without authentication
       return fetch(request);
     }
@@ -134,14 +141,14 @@ export class RequestInterceptor implements IRequestInterceptor {
 
       return response;
     } catch (error) {
-      console.error('[RequestInterceptor] Network error:', error);
+      debugError('[RequestInterceptor] Network error:', error);
 
       // Try to return cached version if available
       const cache = await caches.open(getCacheName());
       const cachedResponse = await cache.match(request);
 
       if (cachedResponse) {
-        console.log('[RequestInterceptor] Returning cached response');
+        debugLog('[RequestInterceptor] Returning cached response');
         return cachedResponse;
       }
 
@@ -160,7 +167,7 @@ export class RequestInterceptor implements IRequestInterceptor {
       return fetch(request);
     }
 
-    console.log('[RequestInterceptor] Processing tile request:', {
+    debugLog('[RequestInterceptor] Processing tile request:', {
       url: url.pathname,
       assetId,
     });
@@ -169,7 +176,7 @@ export class RequestInterceptor implements IRequestInterceptor {
     const token = await tokenManager.getToken();
 
     if (!token) {
-      console.log('[RequestInterceptor] No token for tile request');
+      debugLog('[RequestInterceptor] No token for tile request');
       return fetch(request);
     }
 
@@ -206,7 +213,7 @@ export class RequestInterceptor implements IRequestInterceptor {
       const proxyUrl = CONFIG.api.proxyEndpoint;
 
       if (!proxyUrl) {
-        console.error('[RequestInterceptor] Proxy endpoint not configured');
+        debugError('[RequestInterceptor] Proxy endpoint not configured');
         return null;
       }
 
@@ -224,13 +231,13 @@ export class RequestInterceptor implements IRequestInterceptor {
       });
 
       if (!response.ok) {
-        console.error('[RequestInterceptor] Failed to get signed URL');
+        debugError('[RequestInterceptor] Failed to get signed URL');
         return null;
       }
 
       return await response.json();
     } catch (error) {
-      console.error('[RequestInterceptor] Error getting signed URL:', error);
+      debugError('[RequestInterceptor] Error getting signed URL:', error);
       return null;
     }
   }

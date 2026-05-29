@@ -1,6 +1,6 @@
 import { openDB, DBSchema, IDBPDatabase } from 'idb';
 import type { Token, TokenStorageEntry, TokenManager as ITokenManager } from './types';
-import { CONFIG, getIndexedDBName } from './config';
+import { CONFIG, debugError, debugLog, getIndexedDBName } from './config';
 
 interface AuthDB extends DBSchema {
   tokens: {
@@ -40,11 +40,11 @@ export class TokenManager implements ITokenManager {
    * Get token following the hierarchy: Memory -> IndexedDB -> Fresh request
    */
   async getToken(): Promise<string | null> {
-    console.log('[TokenManager] Getting token...');
+    debugLog('[TokenManager] Getting token...');
 
     // 1. Check memory cache
     if (this.memoryCache && !this.isTokenExpired(this.memoryCache)) {
-      console.log('[TokenManager] Token found in memory cache');
+      debugLog('[TokenManager] Token found in memory cache');
       return this.memoryCache.token;
     }
 
@@ -54,7 +54,7 @@ export class TokenManager implements ITokenManager {
       const dbToken = await this.db!.get('tokens', 'current');
 
       if (dbToken && !this.isTokenExpired(dbToken)) {
-        console.log('[TokenManager] Token found in IndexedDB');
+        debugLog('[TokenManager] Token found in IndexedDB');
         // Update memory cache
         this.memoryCache = dbToken;
         return dbToken.token;
@@ -62,15 +62,15 @@ export class TokenManager implements ITokenManager {
 
       // Check if token needs refresh
       if (dbToken && this.shouldRefresh(dbToken)) {
-        console.log('[TokenManager] Token needs refresh');
+        debugLog('[TokenManager] Token needs refresh');
         return await this.refreshToken();
       }
     } catch (error) {
-      console.error('[TokenManager] Error accessing IndexedDB:', error);
+      debugError('[TokenManager] Error accessing IndexedDB:', error);
     }
 
     // 3. Request fresh token from main thread
-    console.log('[TokenManager] Requesting fresh token from main thread');
+    debugLog('[TokenManager] Requesting fresh token from main thread');
     return await this.requestFreshToken();
   }
 
@@ -91,9 +91,9 @@ export class TokenManager implements ITokenManager {
     try {
       await this.initDB();
       await this.db!.put('tokens', entry, 'current');
-      console.log('[TokenManager] Token stored successfully');
+      debugLog('[TokenManager] Token stored successfully');
     } catch (error) {
-      console.error('[TokenManager] Error storing token:', error);
+      debugError('[TokenManager] Error storing token:', error);
     }
   }
 
@@ -101,21 +101,21 @@ export class TokenManager implements ITokenManager {
    * Refresh token using refresh token
    */
   async refreshToken(): Promise<string | null> {
-    console.log('[TokenManager] Refreshing token...');
+    debugLog('[TokenManager] Refreshing token...');
 
     try {
       // Get current token with refresh token
       const current = this.memoryCache || await this.db?.get('tokens', 'current');
 
       if (!current?.refreshToken) {
-        console.log('[TokenManager] No refresh token available');
+        debugLog('[TokenManager] No refresh token available');
         return await this.requestFreshToken();
       }
 
       // Send message to main thread to refresh token
       const clients = await (self as any).clients.matchAll();
       if (clients.length === 0) {
-        console.log('[TokenManager] No clients available for token refresh');
+        debugLog('[TokenManager] No clients available for token refresh');
         return null;
       }
 
@@ -143,7 +143,7 @@ export class TokenManager implements ITokenManager {
         setTimeout(() => resolve(null), 5000);
       });
     } catch (error) {
-      console.error('[TokenManager] Error refreshing token:', error);
+      debugError('[TokenManager] Error refreshing token:', error);
       return null;
     }
   }
@@ -157,9 +157,9 @@ export class TokenManager implements ITokenManager {
     try {
       await this.initDB();
       await this.db!.delete('tokens', 'current');
-      console.log('[TokenManager] Tokens cleared');
+      debugLog('[TokenManager] Tokens cleared');
     } catch (error) {
-      console.error('[TokenManager] Error clearing tokens:', error);
+      debugError('[TokenManager] Error clearing tokens:', error);
     }
   }
 
@@ -189,7 +189,7 @@ export class TokenManager implements ITokenManager {
     try {
       const clients = await (self as any).clients.matchAll();
       if (clients.length === 0) {
-        console.log('[TokenManager] No clients available');
+        debugLog('[TokenManager] No clients available');
         return null;
       }
 
@@ -212,12 +212,12 @@ export class TokenManager implements ITokenManager {
 
         // Timeout after 5 seconds
         setTimeout(() => {
-          console.log('[TokenManager] Token request timeout');
+          debugLog('[TokenManager] Token request timeout');
           resolve(null);
         }, 5000);
       });
     } catch (error) {
-      console.error('[TokenManager] Error requesting fresh token:', error);
+      debugError('[TokenManager] Error requesting fresh token:', error);
       return null;
     }
   }
