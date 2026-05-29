@@ -71,6 +71,8 @@ await updateToken({
 });
 ```
 
+`registerAssetSecurity()` resolves after the service worker is active and has been asked to control the current page. Always await it before starting protected asset or tile requests so hard reloads do not bypass the service worker.
+
 ### 3. Clear Token on Logout
 
 ```typescript
@@ -167,11 +169,25 @@ await registerAssetSecurity({
 });
 ```
 
+### Service Worker Control Timeout
+
+Sentinel waits up to 5 seconds for an active service worker to control the current page. You can tune this startup wait if your app needs a shorter or longer guardrail:
+
+```typescript
+await registerAssetSecurity({
+  proxyUrl: 'https://proxy.example.com',
+  protectedDomains: ['assets.example.com'],
+  serviceWorkerControlTimeout: 3000
+});
+```
+
 ## API Reference
 
 ### `registerAssetSecurity(config)`
 
 Initialize the service worker with your configuration.
+
+The promise resolves once the service worker is registered, configured, and controlling the current page when the browser allows it. Sentinel sends an internal `CLAIM_CLIENTS` message to handle hard reloads where `navigator.serviceWorker.controller` can be `null`; if control is not gained within `serviceWorkerControlTimeout`, registration continues and logs a warning in debug mode.
 
 **Parameters:**
 - `config.proxyUrl` (string, required): URL of your authentication proxy
@@ -181,6 +197,7 @@ Initialize the service worker with your configuration.
 - `config.namespace` (string, optional): Storage namespace (default: 'asset-security')
 - `config.tokenConfig` (object, optional): Token management settings
 - `config.cacheStrategies` (object, optional): Cache behavior per asset type
+- `config.serviceWorkerControlTimeout` (number, optional): Max wait in ms for the service worker to control the current page (default: 5000)
 - `config.onTokenExpired` (function, optional): Token expiration callback
 - `config.onTokenRefreshed` (function, optional): Token refresh callback
 - `config.onSecurityEvent` (function, optional): Generic event callback
@@ -247,24 +264,34 @@ function App() {
   const { token, isAuthenticated } = useAuth(); // Your auth hook
 
   useEffect(() => {
-    registerAssetSecurity({
-      proxyUrl: import.meta.env.VITE_PROXY_URL,
-      protectedDomains: ['storage.googleapis.com'],
-      onTokenExpired: async () => {
-        // Handle token refresh
-      }
-    });
-  }, []);
+    let cancelled = false;
 
-  useEffect(() => {
-    if (isAuthenticated && token) {
-      updateToken({
-        accessToken: token,
-        expiresAt: Date.now() + 3600000
+    async function setupSecurity() {
+      const result = await registerAssetSecurity({
+        proxyUrl: import.meta.env.VITE_PROXY_URL,
+        protectedDomains: ['storage.googleapis.com'],
+        onTokenExpired: async () => {
+          // Handle token refresh
+        }
       });
-    } else {
-      clearToken();
+
+      if (!result.success || cancelled) return;
+
+      if (isAuthenticated && token) {
+        await updateToken({
+          accessToken: token,
+          expiresAt: Date.now() + 3600000
+        });
+      } else {
+        await clearToken();
+      }
     }
+
+    setupSecurity();
+
+    return () => {
+      cancelled = true;
+    };
   }, [isAuthenticated, token]);
 
   return <YourApp />;
@@ -281,18 +308,22 @@ export default {
   setup() {
     const auth = useAuth(); // Your auth composable
 
-    onMounted(() => {
-      registerAssetSecurity({
+    onMounted(async () => {
+      const result = await registerAssetSecurity({
         proxyUrl: import.meta.env.VITE_PROXY_URL,
         protectedDomains: ['storage.googleapis.com']
       });
+
+      if (result.success && auth.token) {
+        await updateToken({ accessToken: auth.token });
+      }
     });
 
-    watch(() => auth.token, (newToken) => {
+    watch(() => auth.token, async (newToken) => {
       if (newToken) {
-        updateToken({ accessToken: newToken });
+        await updateToken({ accessToken: newToken });
       } else {
-        clearToken();
+        await clearToken();
       }
     });
   }
@@ -304,12 +335,10 @@ export default {
 ```javascript
 import { registerAssetSecurity, updateToken } from '@reearth/sentinel';
 
-// Initialize
-registerAssetSecurity({
+// Initialize before starting protected asset requests
+await registerAssetSecurity({
   proxyUrl: 'https://proxy.example.com',
   protectedDomains: ['assets.example.com']
-}).then(() => {
-  console.log('Asset security initialized');
 });
 
 // On login
@@ -395,6 +424,8 @@ if (!result.success) {
 - Verify `protectedDomains` includes the asset domain
 - Check browser DevTools → Application → Service Workers
 - Ensure assets match `assetPatterns` regex
+- Await `registerAssetSecurity()` before rendering views that start protected requests
+- If requests fail only after a hard reload, deploy the latest `sw.js` so the worker can handle the internal `CLAIM_CLIENTS` message and call `clients.claim()`
 
 ### Token Not Being Applied
 
@@ -446,4 +477,3 @@ Contributions welcome! Please open an issue or PR.
 - 📖 [Documentation](https://github.com/reearth/sentinel)
 - 🐛 [Issue Tracker](https://github.com/reearth/sentinel/issues)
 - 💬 [Discussions](https://github.com/reearth/sentinel/discussions)
-
