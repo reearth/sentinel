@@ -95,6 +95,7 @@ export type MessageType =
   | 'REQUEST_TOKEN'
   | 'CLEAR_CACHE'
   | 'GET_STATUS'
+  | 'CLAIM_CLIENTS'
   | 'TOKEN_EXPIRED'
   | 'TOKEN_REFRESHED'
   | 'TOKEN_PROVIDED'
