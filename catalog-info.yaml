@@ -1,0 +1,18 @@
+apiVersion: backstage.io/v1alpha1
+kind: Component
+metadata:
+  name: sentinel
+  namespace: reearth
+  description: Service worker library for secure asset access with transparent authentication
+  annotations:
+    github.com/project-slug: reearth/sentinel
+  links:
+  - url: https://github.com/reearth/sentinel
+    title: GitHub
+    icon: github
+  tags:
+  - typescript
+spec:
+  type: service
+  lifecycle: production
+  owner: reearth/cto-office
