@@ -10,6 +10,7 @@ import type {
 let swRegistration: ServiceWorkerRegistration | null = null;
 let config: AssetSecurityConfig | null = null;
 let eventListeners: Set<(event: SecurityEvent) => void> = new Set();
+const DEFAULT_SERVICE_WORKER_CONTROL_TIMEOUT = 5000;
 
 /**
  * Register the asset security service worker
@@ -57,6 +58,8 @@ export async function registerAssetSecurity(
       namespace: userConfig.namespace ?? 'asset-security',
       scope: userConfig.scope ?? '/',
       serviceWorkerPath: userConfig.serviceWorkerPath ?? '/sw.js',
+      serviceWorkerControlTimeout:
+        userConfig.serviceWorkerControlTimeout ?? DEFAULT_SERVICE_WORKER_CONTROL_TIMEOUT,
       debug: userConfig.debug ?? false,
     };
 
@@ -83,7 +86,12 @@ export async function registerAssetSecurity(
       }
 
       // Send configuration to existing service worker
+      await waitForServiceWorkerActive(existingRegistration);
       await sendConfigToServiceWorker();
+      await waitForServiceWorkerControl(
+        existingRegistration,
+        config.serviceWorkerControlTimeout
+      );
 
       emitEvent({
         type: 'registration:success',
@@ -111,6 +119,10 @@ export async function registerAssetSecurity(
 
     // Send configuration to service worker
     await sendConfigToServiceWorker();
+    await waitForServiceWorkerControl(
+      swRegistration,
+      config.serviceWorkerControlTimeout
+    );
 
     // Set up message listener from service worker
     setupMessageListener();
@@ -212,6 +224,76 @@ async function waitForServiceWorkerActive(
         resolve();
       }
     });
+  });
+}
+
+async function waitForServiceWorkerControl(
+  registration: ServiceWorkerRegistration,
+  timeoutMs = DEFAULT_SERVICE_WORKER_CONTROL_TIMEOUT
+): Promise<void> {
+  if (navigator.serviceWorker.controller) {
+    if (config?.debug) {
+      console.log('[AssetSecurity] Service worker already controlling the page');
+    }
+    return;
+  }
+
+  const activeWorker = registration.active;
+  if (!activeWorker) {
+    if (config?.debug) {
+      console.warn('[AssetSecurity] Service worker is not active, cannot claim clients');
+    }
+    return;
+  }
+
+  await new Promise<void>((resolve) => {
+    let settled = false;
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+
+    const finish = (controlled: boolean, timedOut = false) => {
+      if (settled) return;
+      settled = true;
+
+      navigator.serviceWorker.removeEventListener('controllerchange', onControllerChange);
+      if (timeout) {
+        clearTimeout(timeout);
+      }
+
+      if (config?.debug) {
+        if (controlled) {
+          console.log('[AssetSecurity] Service worker is controlling the page');
+        } else if (timedOut) {
+          console.warn(
+            '[AssetSecurity] Service worker did not gain control before timeout; protected requests may bypass authentication'
+          );
+        }
+      }
+
+      resolve();
+    };
+
+    const onControllerChange = () => {
+      finish(true);
+    };
+
+    navigator.serviceWorker.addEventListener('controllerchange', onControllerChange, {
+      once: true,
+    });
+
+    timeout = setTimeout(() => {
+      finish(!!navigator.serviceWorker.controller, true);
+    }, timeoutMs);
+
+    if (navigator.serviceWorker.controller) {
+      finish(true);
+      return;
+    }
+
+    activeWorker.postMessage({ type: 'CLAIM_CLIENTS' });
+
+    if (config?.debug) {
+      console.log('[AssetSecurity] Requested service worker client control');
+    }
   });
 }
 

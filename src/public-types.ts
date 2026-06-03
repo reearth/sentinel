@@ -89,6 +89,13 @@ export interface AssetSecurityConfig {
   serviceWorkerPath?: string;
 
   /**
+   * Maximum time to wait for an active service worker to control the current page.
+   * Set to 0 to continue immediately after requesting control.
+   * @default 5000
+   */
+  serviceWorkerControlTimeout?: number;
+
+  /**
    * Enable debug logging
    * @default false
    */

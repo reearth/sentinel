@@ -253,6 +253,12 @@ self.addEventListener('message', async (event) => {
       event.ports[0]?.postMessage(status);
       break;
 
+    case 'CLAIM_CLIENTS':
+      await self.clients.claim();
+      event.ports[0]?.postMessage({ success: true });
+      console.log('[ServiceWorker] Claimed clients via explicit message');
+      break;
+
     default:
       debugWarn('[ServiceWorker] Unknown message type:', message.type);
   }
