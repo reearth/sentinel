@@ -45,7 +45,10 @@ const DEFAULT_CONFIG: ServiceWorkerConfig = {
       tiles: 'network-first',
       documents: 'network-only'
     }
-  }
+  },
+
+  // Debug logging is disabled by default for production consumers
+  debug: false,
 };
 
 /**
@@ -90,14 +93,42 @@ export function updateConfig(config: Partial<ServiceWorkerConfig> & { namespace?
 
   // Validation: warn if required config is missing
   if (CONFIG.protectedDomains.length === 0) {
-    console.warn('[ServiceWorker] Warning: No protected domains configured. Authentication will not be applied.');
+    debugWarn('[ServiceWorker] Warning: No protected domains configured. Authentication will not be applied.');
   }
 
   if (!CONFIG.api.proxyEndpoint) {
-    console.warn('[ServiceWorker] Warning: No proxy endpoint configured. Signed URL functionality will not work.');
+    debugWarn('[ServiceWorker] Warning: No proxy endpoint configured. Signed URL functionality will not work.');
   }
 
-  console.log(`[ServiceWorker] Configuration updated with namespace: ${NAMESPACE}`, CONFIG);
+  debugLog(`[ServiceWorker] Configuration updated with namespace: ${NAMESPACE}`, CONFIG);
+}
+
+export function isDebugEnabled(): boolean {
+  return !!CONFIG.debug;
+}
+
+export function debugLog(...args: unknown[]): void {
+  if (isDebugEnabled()) {
+    console.log(...args);
+  }
+}
+
+export function debugDebug(...args: unknown[]): void {
+  if (isDebugEnabled()) {
+    console.debug(...args);
+  }
+}
+
+export function debugWarn(...args: unknown[]): void {
+  if (isDebugEnabled()) {
+    console.warn(...args);
+  }
+}
+
+export function debugError(...args: unknown[]): void {
+  if (isDebugEnabled()) {
+    console.error(...args);
+  }
 }
 
 /**

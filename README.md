@@ -198,6 +198,7 @@ The promise resolves once the service worker is registered, configured, and cont
 - `config.tokenConfig` (object, optional): Token management settings
 - `config.cacheStrategies` (object, optional): Cache behavior per asset type
 - `config.serviceWorkerControlTimeout` (number, optional): Max wait in ms for the service worker to control the current page (default: 5000)
+- `config.debug` (boolean, optional): Enable debug logging for registration, service worker, token manager, and request interceptor logs (default: `false`)
 - `config.onTokenExpired` (function, optional): Token expiration callback
 - `config.onTokenRefreshed` (function, optional): Token refresh callback
 - `config.onSecurityEvent` (function, optional): Generic event callback
@@ -434,6 +435,16 @@ if (!result.success) {
 const status = await getSecurityStatus();
 console.log('Authenticated:', status.isAuthenticated);
 console.log('Token expires:', new Date(status.tokenExpiresAt));
+```
+
+### Enable Debug Logs
+
+```typescript
+await registerAssetSecurity({
+  proxyUrl: 'https://proxy.example.com',
+  protectedDomains: ['assets.example.com'],
+  debug: true,
+});
 ```
 
 ### Clear Everything and Start Fresh

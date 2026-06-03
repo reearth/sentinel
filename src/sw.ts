@@ -1,7 +1,17 @@
 /// <reference lib="webworker" />
 import { tokenManager } from './token-manager';
 import { requestInterceptor } from './request-interceptor';
-import { getAssetType, getCacheStrategy, getCacheKey, getCacheName, updateConfig } from './config';
+import {
+  debugDebug,
+  debugError,
+  debugLog,
+  debugWarn,
+  getAssetType,
+  getCacheStrategy,
+  getCacheKey,
+  getCacheName,
+  updateConfig,
+} from './config';
 import type { ServiceWorkerMessage, Token } from './types';
 
 declare const self: ServiceWorkerGlobalScope;
@@ -10,7 +20,7 @@ declare const self: ServiceWorkerGlobalScope;
  * Service Worker installation
  */
 self.addEventListener('install', (_event) => {
-  console.log('[ServiceWorker] Installing...');
+  debugLog('[ServiceWorker] Installing...');
   // Skip waiting to activate immediately
   self.skipWaiting();
 });
@@ -19,7 +29,7 @@ self.addEventListener('install', (_event) => {
  * Service Worker activation
  */
 self.addEventListener('activate', (event) => {
-  console.log('[ServiceWorker] Activating...');
+  debugLog('[ServiceWorker] Activating...');
 
   event.waitUntil(
     (async () => {
@@ -34,7 +44,7 @@ self.addEventListener('activate', (event) => {
 
       // Claim all clients
       await self.clients.claim();
-      console.log('[ServiceWorker] Active and controlling all clients');
+      debugLog('[ServiceWorker] Active and controlling all clients');
     })()
   );
 });
@@ -69,7 +79,7 @@ async function handleRequest(request: Request): Promise<Response> {
   const assetType = getAssetType(url);
   const strategy = getCacheStrategy(assetType);
 
-  console.log(`[ServiceWorker] Handling ${assetType} with ${strategy} strategy:`, url.pathname);
+  debugLog(`[ServiceWorker] Handling ${assetType} with ${strategy} strategy:`, url.pathname);
 
   switch (strategy) {
     case 'cache-first':
@@ -94,14 +104,14 @@ async function cacheFirst(request: Request): Promise<Response> {
   // Try cache first
   const cached = await cache.match(cacheKey);
   if (cached) {
-    console.log('[ServiceWorker] Cache hit:', request.url);
+    debugLog('[ServiceWorker] Cache hit:', request.url);
     // Refresh cache in background
     refreshCache(request, cache);
     return cached;
   }
 
   // Network fallback
-  console.log('[ServiceWorker] Cache miss, fetching:', request.url);
+  debugLog('[ServiceWorker] Cache miss, fetching:', request.url);
   try {
     const response = await requestInterceptor.processRequest(request);
 
@@ -113,7 +123,7 @@ async function cacheFirst(request: Request): Promise<Response> {
 
     return response;
   } catch (error) {
-    console.error('[ServiceWorker] Network error:', error);
+    debugError('[ServiceWorker] Network error:', error);
     return new Response('Network error', {
       status: 503,
       statusText: 'Service Unavailable',
@@ -139,12 +149,12 @@ async function networkFirst(request: Request): Promise<Response> {
 
     return response;
   } catch (error) {
-    console.error('[ServiceWorker] Network error, trying cache:', error);
+    debugError('[ServiceWorker] Network error, trying cache:', error);
 
     // Try cache on network failure
     const cached = await cache.match(cacheKey);
     if (cached) {
-      console.log('[ServiceWorker] Returning cached response');
+      debugLog('[ServiceWorker] Returning cached response');
       return cached;
     }
 
@@ -180,7 +190,7 @@ async function networkOnly(request: Request): Promise<Response> {
   try {
     return await requestInterceptor.processRequest(request);
   } catch (error) {
-    console.error('[ServiceWorker] Network error:', error);
+    debugError('[ServiceWorker] Network error:', error);
     return new Response('Network error', {
       status: 503,
       statusText: 'Service Unavailable',
@@ -197,11 +207,11 @@ async function refreshCache(request: Request, cache: Cache): Promise<void> {
     if (response.ok) {
       const cacheKey = getCacheKey(request);
       await cache.put(cacheKey, response);
-      console.log('[ServiceWorker] Cache refreshed:', request.url);
+      debugLog('[ServiceWorker] Cache refreshed:', request.url);
     }
   } catch (error) {
     // Ignore errors in background refresh
-    console.debug('[ServiceWorker] Background refresh failed:', error);
+    debugDebug('[ServiceWorker] Background refresh failed:', error);
   }
 }
 
@@ -211,7 +221,7 @@ async function refreshCache(request: Request, cache: Cache): Promise<void> {
 self.addEventListener('message', async (event) => {
   const message = event.data as ServiceWorkerMessage;
 
-  console.log('[ServiceWorker] Received message:', message.type);
+  debugLog('[ServiceWorker] Received message:', message.type);
 
   switch (message.type) {
     case 'CONFIG':
@@ -250,7 +260,7 @@ self.addEventListener('message', async (event) => {
       break;
 
     default:
-      console.warn('[ServiceWorker] Unknown message type:', message.type);
+      debugWarn('[ServiceWorker] Unknown message type:', message.type);
   }
 });
 
@@ -261,7 +271,7 @@ async function clearAllCaches(): Promise<void> {
   const cacheNames = await caches.keys();
   await Promise.all(cacheNames.map((name) => caches.delete(name)));
   await tokenManager.clearToken();
-  console.log('[ServiceWorker] All caches cleared');
+  debugLog('[ServiceWorker] All caches cleared');
 }
 
 /**
@@ -281,4 +291,4 @@ async function getServiceWorkerStatus(): Promise<object> {
 }
 
 // Log service worker registration
-console.log('[ServiceWorker] Script loaded, waiting for events...');
+debugLog('[ServiceWorker] Script loaded, waiting for events...');
