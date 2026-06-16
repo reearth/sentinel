@@ -1,43 +1,196 @@
+# Opens a release PR: bumps the version, regenerates the changelog, and pushes
+# a release/vX.Y.Z branch. Merging that PR triggers `Tag release`
+# (tag-release.yml), which pushes the tag and fires `Publish` (publish.yml).
+#
+# Requires an org GitHub App so the pushed branch / opened PR are attributed to
+# a distinct identity (events from the default GITHUB_TOKEN are suppressed by
+# GitHub, so a GITHUB_TOKEN-opened PR never runs CI). Configure once:
+#   - repo or org variable GH_APP_ID
+#   - repo or org secret    GH_APP_PRIVATE_KEY
+# Without the App, use the manual flow instead: bump the version in a
+# `chore: release vX.Y.Z` commit on main, then `git push origin vX.Y.Z` —
+# publish.yml fires on the tag push either way.
+
 name: Release
 
 on:
-  push:
-    tags:
-      - "v*"
+  workflow_dispatch:
+    inputs:
+      version_type:
+        description: 'Version bump type'
+        required: true
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
+          - custom
+      custom_version:
+        description: 'Custom version (only used if version_type is custom, e.g., 1.2.3)'
+        required: false
+        type: string
 
 permissions:
   contents: read
 
 jobs:
-  npm:
-    name: npm publish
-    if: startsWith(github.ref, 'refs/tags/v')
+  release:
     runs-on: ubuntu-latest
-    environment: npm-publish # gates publish on required reviewer approval
+    if: github.ref == 'refs/heads/main'
     permissions:
-      contents: read
-      id-token: write # for npm provenance and trusted publishing
+      contents: write
+      pull-requests: write
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+      # Mint an installation token for our GitHub App. Pushing the release
+      # branch and opening the PR with this token (instead of the default
+      # GITHUB_TOKEN) is what lets CI run on the release PR: events triggered
+      # by GITHUB_TOKEN are deliberately suppressed by GitHub to avoid
+      # recursive workflow runs, so a GITHUB_TOKEN-created PR never fires
+      # `pull_request`. An App token is a distinct identity and does fire it.
+      - name: Generate GitHub App token
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
-          # npm Trusted Publishing requires Node >=22.14 and npm >=11.5.1.
-          # Node 22 still ships with npm 10.x, so we upgrade npm below.
-          node-version: "22"
-          registry-url: "https://registry.npmjs.org"
-      - name: Activate npm version pinned in package.json (via corepack)
-        # `packageManager: "npm@X.Y.Z"` in package.json is the source of
-        # truth; corepack installs that exact version. This keeps the local
-        # dev npm and the CI npm in lockstep, and ensures the >=11.5.1 that
-        # npm Trusted Publishing requires.
+          app-id: ${{ vars.GH_APP_ID }}
+          private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
+
+      - name: Checkout repo
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+          # Persist the App token so the release branch push below is
+          # attributed to the App, not GITHUB_TOKEN.
+          token: ${{ steps.app-token.outputs.token }}
+
+      - name: Configure Git
         run: |
-          # `corepack enable` alone only shims yarn/pnpm; npm needs to be
-          # opted-in explicitly, otherwise the system npm (10.x on Node 22)
-          # stays on PATH and Trusted Publishing fails with a 404.
-          corepack enable npm
-          corepack prepare --activate
-          npm --version
-      - run: npm ci || npm install
-      - name: Sync version from tag
-        run: npm version --no-git-tag-version --allow-same-version "${GITHUB_REF_NAME#v}"
-      - run: npm publish --provenance --access public
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Use Node
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: lts/*
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Type-check
+        run: npm run type-check
+
+      - name: Run tests
+        run: npm test
+
+      - name: Run build
+        run: npm run build
+
+      - name: Get current version
+        id: current_version
+        run: echo "version=$(node -p "require('./package.json').version")" >> $GITHUB_OUTPUT
+
+      - name: Bump version
+        id: bump_version
+        run: |
+          if [ "${{ github.event.inputs.version_type }}" = "custom" ]; then
+            NEW_VERSION="${{ github.event.inputs.custom_version }}"
+            npm version $NEW_VERSION --no-git-tag-version
+          else
+            npm version ${{ github.event.inputs.version_type }} --no-git-tag-version
+          fi
+          NEW_VERSION=$(node -p "require('./package.json').version")
+          echo "new_version=$NEW_VERSION" >> $GITHUB_OUTPUT
+
+      - name: Generate changelog
+        id: changelog
+        run: |
+          NEW_VERSION="${{ steps.bump_version.outputs.new_version }}"
+
+          if git describe --tags --abbrev=0 2>/dev/null; then
+            LAST_TAG=$(git describe --tags --abbrev=0)
+            git log $LAST_TAG..HEAD --pretty=format:"- %s" --no-merges > /tmp/commits.txt
+          else
+            git log --pretty=format:"- %s" --no-merges > /tmp/commits.txt
+          fi
+
+          DATE=$(date +%Y-%m-%d)
+
+          cat > /tmp/changelog_entry.md << 'CHANGELOG_EOF'
+          ## [$NEW_VERSION] - $DATE
+
+          ### Changes
+          CHANGELOG_EOF
+
+          sed "s/\$NEW_VERSION/$NEW_VERSION/g; s/\$DATE/$DATE/g" /tmp/changelog_entry.md > /tmp/changelog_header.md
+          cat /tmp/commits.txt >> /tmp/changelog_header.md
+          echo "" >> /tmp/changelog_header.md
+
+          if [ -f CHANGELOG.md ]; then
+            cat /tmp/changelog_header.md CHANGELOG.md > /tmp/new_changelog.md
+            mv /tmp/new_changelog.md CHANGELOG.md
+          else
+            echo "# Changelog" > CHANGELOG.md
+            echo "" >> CHANGELOG.md
+            echo "All notable changes to this project will be documented in this file." >> CHANGELOG.md
+            echo "" >> CHANGELOG.md
+            cat /tmp/changelog_header.md >> CHANGELOG.md
+          fi
+
+          echo "changelog<<CHANGELOG_OUTPUT_EOF" >> $GITHUB_OUTPUT
+          cat /tmp/changelog_header.md >> $GITHUB_OUTPUT
+          echo "CHANGELOG_OUTPUT_EOF" >> $GITHUB_OUTPUT
+
+      - name: Create release branch and commit
+        id: create_branch
+        run: |
+          BRANCH_NAME="release/v${{ steps.bump_version.outputs.new_version }}"
+          git checkout -b "$BRANCH_NAME"
+          # `npm version` above bumps package-lock.json too, so commit it as well
+          # to keep the lockfile in sync with package.json.
+          git add package.json package-lock.json CHANGELOG.md
+          git commit -m "chore: release v${{ steps.bump_version.outputs.new_version }}"
+          git push origin "$BRANCH_NAME"
+          echo "branch_name=$BRANCH_NAME" >> $GITHUB_OUTPUT
+
+      - name: Create Pull Request
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          # Open the PR as the App so CI's `pull_request` trigger fires.
+          github-token: ${{ steps.app-token.outputs.token }}
+          script: |
+            const changelog = `${{ steps.changelog.outputs.changelog }}`;
+            const version = '${{ steps.bump_version.outputs.new_version }}';
+            const branchName = '${{ steps.create_branch.outputs.branch_name }}';
+
+            const prBody = `## Release v${version}
+
+            This PR was automatically created by the release workflow.
+
+            ### Changelog
+            ${changelog}
+
+            ### Pre-merge Checklist
+            - [ ] Review version bump is correct
+            - [ ] Review changelog entries
+            - [ ] All tests passing
+            - [ ] Build successful
+
+            ### Post-merge Steps
+            After merging this PR:
+            1. The \`Tag release\` workflow pushes the \`v${version}\` tag automatically, which triggers \`Publish\`.
+            2. Approve the \`npm-publish\` environment on the resulting Publish workflow run to publish to npm with provenance.
+            `;
+
+            const { data: pr } = await github.rest.pulls.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: `chore: release v${version}`,
+              head: branchName,
+              base: 'main',
+              body: prBody
+            });
+
+            console.log('Pull request created:', pr.html_url);
+            core.summary.addHeading('Release PR Created');
+            core.summary.addLink('View Pull Request', pr.html_url);
+            await core.summary.write();
