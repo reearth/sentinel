@@ -4,7 +4,13 @@ import type {
   TokenUpdateOptions,
   AssetSecurityStatus,
 } from './public-types.js';
-import { getRegistration, getConfig } from './register.js';
+import {
+  getRegistration,
+  getConfig,
+  debugLog,
+  debugWarn,
+  debugError,
+} from './register.js';
 
 /**
  * Update the authentication token in the service worker
@@ -27,12 +33,9 @@ export async function updateToken(
   options: TokenUpdateOptions
 ): Promise<boolean> {
   const registration = getRegistration();
-  const config = getConfig();
 
   if (!registration?.active) {
-    if (config?.debug) {
-      console.warn('[AssetSecurity] Service worker not active, cannot update token');
-    }
+    debugWarn('[AssetSecurity] Service worker not active, cannot update token');
     return false;
   }
 
@@ -60,24 +63,18 @@ export async function updateToken(
     // Wait for acknowledgment
     return new Promise((resolve) => {
       messageChannel.port1.onmessage = (event) => {
-        if (config?.debug) {
-          console.log('[AssetSecurity] Token updated successfully');
-        }
+        debugLog('[AssetSecurity] Token updated successfully');
         resolve(event.data.success || false);
       };
 
       // Timeout after 5 seconds
       setTimeout(() => {
-        if (config?.debug) {
-          console.warn('[AssetSecurity] Token update timeout');
-        }
+        debugWarn('[AssetSecurity] Token update timeout');
         resolve(false);
       }, 5000);
     });
   } catch (error) {
-    if (config?.debug) {
-      console.error('[AssetSecurity] Failed to update token:', error);
-    }
+    debugError('[AssetSecurity] Failed to update token:', error);
     return false;
   }
 }
@@ -97,12 +94,9 @@ export async function updateToken(
  */
 export async function clearToken(): Promise<boolean> {
   const registration = getRegistration();
-  const config = getConfig();
 
   if (!registration?.active) {
-    if (config?.debug) {
-      console.warn('[AssetSecurity] Service worker not active, cannot clear token');
-    }
+    debugWarn('[AssetSecurity] Service worker not active, cannot clear token');
     return false;
   }
 
@@ -111,15 +105,11 @@ export async function clearToken(): Promise<boolean> {
       type: 'CLEAR_CACHE',
     });
 
-    if (config?.debug) {
-      console.log('[AssetSecurity] Token cleared');
-    }
+    debugLog('[AssetSecurity] Token cleared');
 
     return true;
   } catch (error) {
-    if (config?.debug) {
-      console.error('[AssetSecurity] Failed to clear token:', error);
-    }
+    debugError('[AssetSecurity] Failed to clear token:', error);
     return false;
   }
 }
@@ -198,9 +188,7 @@ export async function getSecurityStatus(): Promise<AssetSecurityStatus> {
         proxyStatus,
       };
     } catch (error) {
-      if (config?.debug) {
-        console.error('[AssetSecurity] Failed to get status:', error);
-      }
+      debugError('[AssetSecurity] Failed to get status:', error);
     }
   }
 
@@ -226,12 +214,9 @@ export async function getSecurityStatus(): Promise<AssetSecurityStatus> {
  */
 export async function clearCache(): Promise<boolean> {
   const registration = getRegistration();
-  const config = getConfig();
 
   if (!registration?.active) {
-    if (config?.debug) {
-      console.warn('[AssetSecurity] Service worker not active, cannot clear cache');
-    }
+    debugWarn('[AssetSecurity] Service worker not active, cannot clear cache');
     return false;
   }
 
@@ -240,15 +225,11 @@ export async function clearCache(): Promise<boolean> {
       type: 'CLEAR_CACHE',
     });
 
-    if (config?.debug) {
-      console.log('[AssetSecurity] Cache cleared');
-    }
+    debugLog('[AssetSecurity] Cache cleared');
 
     return true;
   } catch (error) {
-    if (config?.debug) {
-      console.error('[AssetSecurity] Failed to clear cache:', error);
-    }
+    debugError('[AssetSecurity] Failed to clear cache:', error);
     return false;
   }
 }
@@ -267,27 +248,20 @@ export async function clearCache(): Promise<boolean> {
  */
 export async function forceUpdate(): Promise<boolean> {
   const registration = getRegistration();
-  const config = getConfig();
 
   if (!registration) {
-    if (config?.debug) {
-      console.warn('[AssetSecurity] No registration found');
-    }
+    debugWarn('[AssetSecurity] No registration found');
     return false;
   }
 
   try {
     await registration.update();
 
-    if (config?.debug) {
-      console.log('[AssetSecurity] Service worker update check complete');
-    }
+    debugLog('[AssetSecurity] Service worker update check complete');
 
     return true;
   } catch (error) {
-    if (config?.debug) {
-      console.error('[AssetSecurity] Failed to update service worker:', error);
-    }
+    debugError('[AssetSecurity] Failed to update service worker:', error);
     return false;
   }
 }

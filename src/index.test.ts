@@ -105,3 +105,56 @@ describe('@reearth/sentinel public API', () => {
     ).toBe(false);
   });
 });
+
+describe('@reearth/sentinel debug logging', () => {
+  it('stays silent when debug is disabled', async () => {
+    createServiceWorkerEnvironment(true);
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    await api.registerAssetSecurity({
+      proxyUrl: 'https://proxy.example.com',
+      protectedDomains: ['assets.example.com'],
+    });
+    await api.clearToken();
+
+    expect(log).not.toHaveBeenCalled();
+    expect(warn).not.toHaveBeenCalled();
+    expect(error).not.toHaveBeenCalled();
+  });
+
+  it('writes namespaced logs when debug is enabled', async () => {
+    createServiceWorkerEnvironment(true);
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+
+    await api.registerAssetSecurity({
+      proxyUrl: 'https://proxy.example.com',
+      protectedDomains: ['assets.example.com'],
+      debug: true,
+    });
+    await api.clearToken();
+
+    expect(
+      log.mock.calls.some(
+        ([first]) => typeof first === 'string' && first.startsWith('[AssetSecurity]')
+      )
+    ).toBe(true);
+  });
+
+  it('still logs unregistration before the config is torn down', async () => {
+    createServiceWorkerEnvironment(true);
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+
+    await api.registerAssetSecurity({
+      proxyUrl: 'https://proxy.example.com',
+      protectedDomains: ['assets.example.com'],
+      debug: true,
+    });
+    log.mockClear();
+
+    await api.unregisterAssetSecurity();
+
+    expect(log).toHaveBeenCalledWith('[AssetSecurity] Service worker unregistered');
+  });
+});
