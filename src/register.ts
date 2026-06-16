@@ -12,6 +12,27 @@ let config: AssetSecurityConfig | null = null;
 let eventListeners: Set<(event: SecurityEvent) => void> = new Set();
 const DEFAULT_SERVICE_WORKER_CONTROL_TIMEOUT = 5000;
 
+// Debug logging for the page side. The service worker has its own helpers in
+// config.ts; this code runs in the page and reads the page-side config, so it
+// can't share those. Both go quiet unless the consumer opts in with debug: true.
+export function debugLog(...args: unknown[]): void {
+  if (config?.debug) {
+    console.log(...args);
+  }
+}
+
+export function debugWarn(...args: unknown[]): void {
+  if (config?.debug) {
+    console.warn(...args);
+  }
+}
+
+export function debugError(...args: unknown[]): void {
+  if (config?.debug) {
+    console.error(...args);
+  }
+}
+
 /**
  * Register the asset security service worker
  *
@@ -68,10 +89,7 @@ export async function registerAssetSecurity(
       eventListeners.add(config.onSecurityEvent);
     }
 
-    // Log configuration in debug mode
-    if (config.debug) {
-      console.log('[AssetSecurity] Registering with config:', config);
-    }
+    debugLog('[AssetSecurity] Registering with config:', config);
 
     // Check if already registered
     const existingRegistration = await navigator.serviceWorker.getRegistration(
@@ -81,9 +99,7 @@ export async function registerAssetSecurity(
     if (existingRegistration) {
       swRegistration = existingRegistration;
 
-      if (config.debug) {
-        console.log('[AssetSecurity] Service worker already registered');
-      }
+      debugLog('[AssetSecurity] Service worker already registered');
 
       // Send configuration to existing service worker
       await waitForServiceWorkerActive(existingRegistration);
@@ -110,9 +126,7 @@ export async function registerAssetSecurity(
       }
     );
 
-    if (config.debug) {
-      console.log('[AssetSecurity] Service worker registered successfully');
-    }
+    debugLog('[AssetSecurity] Service worker registered successfully');
 
     // Wait for service worker to become active
     await waitForServiceWorkerActive(swRegistration);
@@ -137,9 +151,7 @@ export async function registerAssetSecurity(
   } catch (error) {
     const err = error instanceof Error ? error : new Error(String(error));
 
-    if (config?.debug) {
-      console.error('[AssetSecurity] Registration failed:', err);
-    }
+    debugError('[AssetSecurity] Registration failed:', err);
 
     if (config?.onRegistrationError) {
       config.onRegistrationError(err);
@@ -163,26 +175,20 @@ export async function unregisterAssetSecurity(): Promise<boolean> {
     return false;
   }
 
-  const debugMode = config?.debug;
-
   try {
     const success = await swRegistration.unregister();
 
     if (success) {
+      // Log before clearing config, otherwise the helper can't see debug.
+      debugLog('[AssetSecurity] Service worker unregistered');
       swRegistration = null;
       config = null;
       eventListeners.clear();
-
-      if (debugMode) {
-        console.log('[AssetSecurity] Service worker unregistered');
-      }
     }
 
     return success;
   } catch (error) {
-    if (debugMode) {
-      console.error('[AssetSecurity] Unregistration failed:', error);
-    }
+    debugError('[AssetSecurity] Unregistration failed:', error);
     return false;
   }
 }
@@ -232,17 +238,13 @@ async function waitForServiceWorkerControl(
   timeoutMs = DEFAULT_SERVICE_WORKER_CONTROL_TIMEOUT
 ): Promise<void> {
   if (navigator.serviceWorker.controller) {
-    if (config?.debug) {
-      console.log('[AssetSecurity] Service worker already controlling the page');
-    }
+    debugLog('[AssetSecurity] Service worker already controlling the page');
     return;
   }
 
   const activeWorker = registration.active;
   if (!activeWorker) {
-    if (config?.debug) {
-      console.warn('[AssetSecurity] Service worker is not active, cannot claim clients');
-    }
+    debugWarn('[AssetSecurity] Service worker is not active, cannot claim clients');
     return;
   }
 
@@ -259,14 +261,12 @@ async function waitForServiceWorkerControl(
         clearTimeout(timeout);
       }
 
-      if (config?.debug) {
-        if (controlled) {
-          console.log('[AssetSecurity] Service worker is controlling the page');
-        } else if (timedOut) {
-          console.warn(
-            '[AssetSecurity] Service worker did not gain control before timeout; protected requests may bypass authentication'
-          );
-        }
+      if (controlled) {
+        debugLog('[AssetSecurity] Service worker is controlling the page');
+      } else if (timedOut) {
+        debugWarn(
+          '[AssetSecurity] Service worker did not gain control before timeout; protected requests may bypass authentication'
+        );
       }
 
       resolve();
@@ -291,9 +291,7 @@ async function waitForServiceWorkerControl(
 
     activeWorker.postMessage({ type: 'CLAIM_CLIENTS' });
 
-    if (config?.debug) {
-      console.log('[AssetSecurity] Requested service worker client control');
-    }
+    debugLog('[AssetSecurity] Requested service worker client control');
   });
 }
 
@@ -326,9 +324,7 @@ function setupMessageListener(): void {
   navigator.serviceWorker.addEventListener('message', (event) => {
     const { type, payload } = event.data;
 
-    if (config?.debug) {
-      console.log('[AssetSecurity] Message from SW:', type, payload);
-    }
+    debugLog('[AssetSecurity] Message from SW:', type, payload);
 
     switch (type) {
       case 'TOKEN_EXPIRED':
@@ -384,9 +380,7 @@ function emitEvent(event: SecurityEvent): void {
     try {
       listener(event);
     } catch (error) {
-      if (config?.debug) {
-        console.error('[AssetSecurity] Event listener error:', error);
-      }
+      debugError('[AssetSecurity] Event listener error:', error);
     }
   });
 }
