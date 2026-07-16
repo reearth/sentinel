@@ -9,10 +9,25 @@ interface AuthDB extends DBSchema {
   };
 }
 
+/**
+ * After a fresh-token request to the page goes unanswered, don't ask
+ * again for this long. A tokenless viewer session otherwise re-runs the
+ * REQUEST_TOKEN round trip (with its 5s timeout) once per intercepted
+ * request — a tile burst turns that into hundreds of parallel messages
+ * and stalled requests.
+ */
+export const TOKEN_ACQUISITION_BACKOFF_MS = 15_000;
+
 export class TokenManager implements ITokenManager {
   private memoryCache: TokenStorageEntry | null = null;
   private db: IDBPDatabase<AuthDB> | null = null;
   private dbPromise: Promise<IDBPDatabase<AuthDB>> | null = null;
+
+  /** Shared in-flight fresh-token request — the SW is a single context,
+   *  so concurrent intercepted requests await one round trip instead of
+   *  each messaging the page separately. */
+  private inFlightAcquisition: Promise<string | null> | null = null;
+  private lastAcquisitionFailureAt = 0;
 
   constructor() {
     // Don't initialize DB in constructor - let it be lazy loaded
@@ -183,9 +198,31 @@ export class TokenManager implements ITokenManager {
   }
 
   /**
-   * Request fresh token from main thread
+   * Request a fresh token from the main thread — single-flight, with a
+   * backoff window after an unanswered request (see
+   * TOKEN_ACQUISITION_BACKOFF_MS).
    */
   private async requestFreshToken(): Promise<string | null> {
+    if (Date.now() - this.lastAcquisitionFailureAt < TOKEN_ACQUISITION_BACKOFF_MS) {
+      debugLog('[TokenManager] Skipping token request during backoff window');
+      return null;
+    }
+
+    this.inFlightAcquisition ??= this.requestTokenFromClients()
+      .then((token) => {
+        if (!token) {
+          this.lastAcquisitionFailureAt = Date.now();
+        }
+        return token;
+      })
+      .finally(() => {
+        this.inFlightAcquisition = null;
+      });
+
+    return this.inFlightAcquisition;
+  }
+
+  private async requestTokenFromClients(): Promise<string | null> {
     try {
       const clients = await (self as any).clients.matchAll();
       if (clients.length === 0) {
