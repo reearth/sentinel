@@ -1,14 +1,10 @@
 /// <reference lib="webworker" />
 import { tokenManager } from './token-manager';
 import { requestInterceptor } from './request-interceptor';
+import { handleRequest } from './strategies';
 import {
-  debugDebug,
-  debugError,
   debugLog,
   debugWarn,
-  getAssetType,
-  getCacheStrategy,
-  getCacheKey,
   getCacheName,
   updateConfig,
 } from './config';
@@ -70,150 +66,6 @@ self.addEventListener('fetch', (event) => {
   // Handle intercepted request
   event.respondWith(handleRequest(request));
 });
-
-/**
- * Handle intercepted requests with caching strategies
- */
-async function handleRequest(request: Request): Promise<Response> {
-  const url = new URL(request.url);
-  const assetType = getAssetType(url);
-  const strategy = getCacheStrategy(assetType);
-
-  debugLog(`[ServiceWorker] Handling ${assetType} with ${strategy} strategy:`, url.pathname);
-
-  switch (strategy) {
-    case 'cache-first':
-      return cacheFirst(request);
-    case 'network-first':
-      return networkFirst(request);
-    case 'cache-only':
-      return cacheOnly(request);
-    case 'network-only':
-    default:
-      return networkOnly(request);
-  }
-}
-
-/**
- * Cache-first strategy (for images)
- */
-async function cacheFirst(request: Request): Promise<Response> {
-  const cache = await caches.open(getCacheName());
-  const cacheKey = getCacheKey(request);
-
-  // Try cache first
-  const cached = await cache.match(cacheKey);
-  if (cached) {
-    debugLog('[ServiceWorker] Cache hit:', request.url);
-    // Refresh cache in background
-    refreshCache(request, cache);
-    return cached;
-  }
-
-  // Network fallback
-  debugLog('[ServiceWorker] Cache miss, fetching:', request.url);
-  try {
-    const response = await requestInterceptor.processRequest(request);
-
-    // Cache successful responses
-    if (response.ok) {
-      const cloned = response.clone();
-      cache.put(cacheKey, cloned);
-    }
-
-    return response;
-  } catch (error) {
-    debugError('[ServiceWorker] Network error:', error);
-    return new Response('Network error', {
-      status: 503,
-      statusText: 'Service Unavailable',
-    });
-  }
-}
-
-/**
- * Network-first strategy (for tiles)
- */
-async function networkFirst(request: Request): Promise<Response> {
-  const cache = await caches.open(getCacheName());
-  const cacheKey = getCacheKey(request);
-
-  try {
-    const response = await requestInterceptor.processRequest(request);
-
-    // Cache successful responses
-    if (response.ok) {
-      const cloned = response.clone();
-      cache.put(cacheKey, cloned);
-    }
-
-    return response;
-  } catch (error) {
-    debugError('[ServiceWorker] Network error, trying cache:', error);
-
-    // Try cache on network failure
-    const cached = await cache.match(cacheKey);
-    if (cached) {
-      debugLog('[ServiceWorker] Returning cached response');
-      return cached;
-    }
-
-    return new Response('Network error', {
-      status: 503,
-      statusText: 'Service Unavailable',
-    });
-  }
-}
-
-/**
- * Cache-only strategy
- */
-async function cacheOnly(request: Request): Promise<Response> {
-  const cache = await caches.open(getCacheName());
-  const cacheKey = getCacheKey(request);
-  const cached = await cache.match(cacheKey);
-
-  if (cached) {
-    return cached;
-  }
-
-  return new Response('Not in cache', {
-    status: 404,
-    statusText: 'Not Found',
-  });
-}
-
-/**
- * Network-only strategy (for documents)
- */
-async function networkOnly(request: Request): Promise<Response> {
-  try {
-    return await requestInterceptor.processRequest(request);
-  } catch (error) {
-    debugError('[ServiceWorker] Network error:', error);
-    return new Response('Network error', {
-      status: 503,
-      statusText: 'Service Unavailable',
-    });
-  }
-}
-
-/**
- * Refresh cache in background
- */
-async function refreshCache(request: Request, cache: Cache): Promise<void> {
-  try {
-    const response = await requestInterceptor.processRequest(request);
-    if (response.ok) {
-      const cacheKey = getCacheKey(request);
-      await cache.put(cacheKey, response);
-      debugLog('[ServiceWorker] Cache refreshed:', request.url);
-    }
-  } catch (error) {
-    // Ignore errors in background refresh
-    debugDebug('[ServiceWorker] Background refresh failed:', error);
-  }
-}
 
 /**
  * Handle messages from the main thread
