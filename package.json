@@ -57,7 +57,7 @@
   },
   "dependencies": {
     "idb": "^8.0.0",
-    "jose": "^5.0.0"
+    "jose": "^6.2.6"
   },
   "peerDependencies": {},
   "publishConfig": {
