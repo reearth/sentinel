@@ -1,5 +1,5 @@
-# Opens a release PR: bumps the version, regenerates the changelog, and pushes
-# a release/vX.Y.Z branch. Merging that PR triggers `Tag release`
+# Opens a release PR: bumps the version, checks CHANGELOG.md and RELEASE_NOTES.md
+# lead with it, and pushes a release/vX.Y.Z branch. Merging that PR triggers `Tag release`
 # (tag-release.yml), which pushes the tag and fires `Publish` (publish.yml).
 #
 # Requires an org GitHub App so the pushed branch / opened PR are attributed to
@@ -105,44 +105,11 @@ jobs:
           NEW_VERSION=$(node -p "require('./package.json').version")
           echo "new_version=$NEW_VERSION" >> $GITHUB_OUTPUT
 
-      - name: Generate changelog
-        id: changelog
-        run: |
-          NEW_VERSION="${{ steps.bump_version.outputs.new_version }}"
-
-          if git describe --tags --abbrev=0 2>/dev/null; then
-            LAST_TAG=$(git describe --tags --abbrev=0)
-            git log $LAST_TAG..HEAD --pretty=format:"- %s" --no-merges > /tmp/commits.txt
-          else
-            git log --pretty=format:"- %s" --no-merges > /tmp/commits.txt
-          fi
-
-          DATE=$(date +%Y-%m-%d)
-
-          cat > /tmp/changelog_entry.md << 'CHANGELOG_EOF'
-          ## [$NEW_VERSION] - $DATE
-
-          ### Changes
-          CHANGELOG_EOF
-
-          sed "s/\$NEW_VERSION/$NEW_VERSION/g; s/\$DATE/$DATE/g" /tmp/changelog_entry.md > /tmp/changelog_header.md
-          cat /tmp/commits.txt >> /tmp/changelog_header.md
-          echo "" >> /tmp/changelog_header.md
-
-          if [ -f CHANGELOG.md ]; then
-            cat /tmp/changelog_header.md CHANGELOG.md > /tmp/new_changelog.md
-            mv /tmp/new_changelog.md CHANGELOG.md
-          else
-            echo "# Changelog" > CHANGELOG.md
-            echo "" >> CHANGELOG.md
-            echo "All notable changes to this project will be documented in this file." >> CHANGELOG.md
-            echo "" >> CHANGELOG.md
-            cat /tmp/changelog_header.md >> CHANGELOG.md
-          fi
-
-          echo "changelog<<CHANGELOG_OUTPUT_EOF" >> $GITHUB_OUTPUT
-          cat /tmp/changelog_header.md >> $GITHUB_OUTPUT
-          echo "CHANGELOG_OUTPUT_EOF" >> $GITHUB_OUTPUT
+      # CHANGELOG.md and RELEASE_NOTES.md are written in the PRs that ship
+      # each change, under the version they ship in. The release only bumps
+      # package.json, and fails if the docs do not lead with that version.
+      - name: Verify CHANGELOG and release notes name this version
+        run: scripts/release-docs.sh "${{ steps.bump_version.outputs.new_version }}" "$RUNNER_TEMP/release-notes.md"
 
       - name: Create release branch and commit
         id: create_branch
@@ -151,7 +118,7 @@ jobs:
           git checkout -b "$BRANCH_NAME"
           # `npm version` above bumps package-lock.json too, so commit it as well
           # to keep the lockfile in sync with package.json.
-          git add package.json package-lock.json CHANGELOG.md
+          git add package.json package-lock.json
           git commit -m "chore: release v${{ steps.bump_version.outputs.new_version }}"
           git push origin "$BRANCH_NAME"
           echo "branch_name=$BRANCH_NAME" >> $GITHUB_OUTPUT
@@ -162,7 +129,7 @@ jobs:
           # Open the PR as the App so CI's `pull_request` trigger fires.
           github-token: ${{ steps.app-token.outputs.token }}
           script: |
-            const changelog = `${{ steps.changelog.outputs.changelog }}`;
+            const notes = require('fs').readFileSync(`${process.env.RUNNER_TEMP}/release-notes.md`, 'utf8');
             const version = '${{ steps.bump_version.outputs.new_version }}';
             const branchName = '${{ steps.create_branch.outputs.branch_name }}';
 
@@ -170,12 +137,12 @@ jobs:
 
             This PR was automatically created by the release workflow.
 
-            ### Changelog
-            ${changelog}
+            ### Release notes
+            ${notes}
 
             ### Pre-merge Checklist
             - [ ] Review version bump is correct
-            - [ ] Review changelog entries
+            - [ ] Review CHANGELOG.md and RELEASE_NOTES.md for this version
             - [ ] All tests passing
             - [ ] Build successful
 

@@ -4,13 +4,45 @@ on:
   push:
     branches: [main]
   pull_request:
+    # labeled/unlabeled re-run the release-docs check when `no-release-notes` changes.
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+  # Weekly canary: catches an advisory or a toolchain break that lands while
+  # nothing is pushed. GitHub disables schedules in public repos after 60 days
+  # without activity, so Dependabot alerts remain the durable channel.
+  # Off-hour and off-minute, because GitHub delays schedules at the top of the hour.
+  schedule:
+    - cron: "23 4 * * 1"
+  workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
   test:
-    name: Test
+    name: Test (Node ${{ matrix.node }})
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        # Active LTS and current LTS. Node only builds and tests the package;
+        # the published code runs in browsers.
+        node: ["22", "24"]
+    steps:
+      - name: Harden Runner
+        uses: step-security/harden-runner@46b06cea07f9e64621fdf066ba77ac6915163d43 # v2
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+      - run: npm ci
+      - run: npm run type-check
+      - run: npm test
+      - run: npm run build
+
+  audit:
+    name: Dependency audit
     runs-on: ubuntu-latest
     steps:
       - name: Harden Runner
@@ -20,9 +52,51 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: "22"
+          node-version: "24"
           cache: npm
       - run: npm ci
-      - run: npm run type-check
-      - run: npm test
-      - run: npm run build
+      # Only runtime dependencies ship to consumers, so only they gate the build.
+      - run: npm audit --omit=dev --audit-level=high
+      - run: npm audit signatures
+
+  release-docs:
+    name: Release docs
+    runs-on: ubuntu-latest
+    steps:
+      - name: Harden Runner
+        uses: step-security/harden-runner@46b06cea07f9e64621fdf066ba77ac6915163d43 # v2
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - name: CHANGELOG and RELEASE_NOTES agree on the newest version
+        run: scripts/release-docs.sh
+      # Catches a missing entry at review time. At tag time the only remedy is
+      # a docs-only PR to a PR-protected main.
+      - name: Behaviour changes carry entries
+        if: ${{ github.event_name == 'pull_request' && !contains(github.event.pull_request.labels.*.name, 'no-release-notes') }}
+        run: |
+          set -euo pipefail
+          # Fail closed: an unresolvable base or an empty diff means this step
+          # is not looking at the PR, and the filter below would pass vacuously.
+          base="origin/$GITHUB_BASE_REF"
+          git rev-parse --verify --quiet "$base" >/dev/null ||
+            { echo "::error::Cannot resolve $base."; exit 1; }
+          changed=$(git diff --name-only "$base...HEAD")
+          [ -n "$changed" ] ||
+            { echo "::error::Empty diff against $base."; exit 1; }
+          src=$(printf '%s\n' "$changed" | grep -E '^src/' | grep -vE '\.test\.ts$' || true)
+          if [ -z "$src" ]; then
+            echo "No library source changed; entries not required."
+            exit 0
+          fi
+          echo "Library source changed:"; printf '%s\n' "$src" | sed 's/^/  /'
+          missing=
+          printf '%s\n' "$changed" | grep -qx 'CHANGELOG.md' || missing="$missing CHANGELOG.md"
+          printf '%s\n' "$changed" | grep -qx 'RELEASE_NOTES.md' || missing="$missing RELEASE_NOTES.md"
+          if [ -n "$missing" ]; then
+            echo "::error::This PR changes src/ but does not touch:$missing. See CONTRIBUTING.md, \"CHANGELOG and release notes\". If it ships no behaviour, apply the 'no-release-notes' label."
+            exit 1
+          fi
+          echo "Entries present in both files."
