@@ -1,31 +1,18 @@
-## Description
+## Summary
 
-<!-- Provide a brief description of your changes -->
+<!-- What does this PR do, and why? Link the related issue. -->
+<!-- Use a separate `Closes #N` for each issue; a comma-separated list closes only the first. -->
 
-## Type of Change
+Closes #
 
-- [ ] Bug fix (non-breaking change which fixes an issue)
-- [ ] New feature (non-breaking change which adds functionality)
-- [ ] Breaking change (fix or feature that would cause existing functionality to not work as expected)
-- [ ] Documentation update
-- [ ] Code refactoring
-- [ ] Performance improvement
+## Changes
+
+-
 
 ## Checklist
 
-- [ ] My code follows the code style of this project
-- [ ] I have performed a self-review of my own code
-- [ ] I have commented my code, particularly in hard-to-understand areas
-- [ ] I have made corresponding changes to the documentation
-- [ ] My changes generate no new warnings
-- [ ] I have added tests that prove my fix is effective or that my feature works
-- [ ] New and existing unit tests pass locally with my changes
-- [ ] I have run `npm run type-check` and there are no errors
-
-## Testing
-
-<!-- Describe the tests you ran and/or how reviewers can test your changes -->
-
-## Additional Notes
-
-<!-- Any additional information that would be helpful for reviewers -->
+- [ ] `npm run type-check`, `npm test` and `npm run build` pass
+- [ ] Tests added for new behaviour
+- [ ] `CHANGELOG.md` updated under the next version's dated heading (e.g. `## [0.1.4] — 2026-12-01`); we don't use `[Unreleased]`
+- [ ] `RELEASE_NOTES.md` has a `## v<version>` section for that same version (it becomes the GitHub release body)
+- [ ] README updated for any changed option or public API

@@ -21,6 +21,8 @@
 #   4. Approve the `npm-publish` environment on the run page.
 #   5. npm receives the package with a provenance attestation; anyone can
 #      verify with `npm audit signatures`.
+#   6. The `github-release` job publishes the top section of RELEASE_NOTES.md
+#      as the GitHub release body.
 #
 # A manually pushed tag (`git push origin vX.Y.Z`) also triggers this workflow,
 # so the pipeline still works without the App-based automation above.
@@ -86,6 +88,10 @@ jobs:
             exit 1
           fi
           echo "Publishing version $PKG_VERSION"
+      # npm versions are immutable, so a tag without its CHANGELOG entry and
+      # release notes fails here, before anything is published.
+      - name: Verify CHANGELOG and release notes name this version
+        run: scripts/release-docs.sh "${GITHUB_REF_NAME#v}"
       - name: Build
         run: npm run build
       - name: Publish to npm with provenance
@@ -99,3 +105,28 @@ jobs:
             echo "Stable release; publishing to dist-tag 'latest'"
             npm publish --provenance --access public
           fi
+
+  github-release:
+    name: GitHub release
+    needs: npm
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Harden Runner
+        uses: step-security/harden-runner@46b06cea07f9e64621fdf066ba77ac6915163d43 # v2
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # RELEASE_NOTES.md is cumulative and newest-first, so the release body is
+      # only its top section, which the npm job already verified names this tag.
+      - name: Create the GitHub release from RELEASE_NOTES.md
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          notes="$RUNNER_TEMP/release-notes.md"
+          scripts/release-docs.sh "${GITHUB_REF_NAME#v}" "$notes"
+          prerelease=
+          [[ "$GITHUB_REF_NAME" == *-* ]] && prerelease=--prerelease
+          gh release create "$GITHUB_REF_NAME" --verify-tag --title "$GITHUB_REF_NAME" \
+            --notes-file "$notes" $prerelease
