@@ -51,6 +51,7 @@
   "license": "Apache-2.0",
   "devDependencies": {
     "@types/node": "^26.1.1",
+    "fake-indexeddb": "^6.2.8",
     "typescript": "^7.0.2",
     "vite": "^8.1.5",
     "vitest": "^4.1.10"
@@ -59,7 +60,6 @@
     "idb": "^8.0.0",
     "jose": "^5.0.0"
   },
-  "peerDependencies": {},
   "publishConfig": {
     "access": "public"
   },
