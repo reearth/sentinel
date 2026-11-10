@@ -89,14 +89,27 @@ export class FakeServiceWorkerRuntime {
     return responded;
   }
 
-  /** Post a message to the page the way the worker does (clients[0].postMessage) and collect replies on its port. */
-  async askPage(message: unknown, settleMs = 20): Promise<unknown[]> {
-    const channel = new MessageChannel();
+  /**
+   * Post a message to the page the way the worker does and collect what the
+   * page posts back on the port. Resolves once the first reply has arrived
+   * and every reply racing it in the same turn is in (so a duplicate listener
+   * still shows up as a second reply), or with nothing after `timeoutMs`.
+   */
+  async askPage(message: unknown, timeoutMs = 2000): Promise<unknown[]> {
     const replies: unknown[] = [];
-    channel.port1.onmessage = (event) => replies.push(event.data);
-    this.pageClient.postMessage(message, [channel.port2]);
-    await new Promise((resolve) => setTimeout(resolve, settleMs));
-    channel.port1.close();
+    let firstReply!: () => void;
+    const replied = new Promise<void>((resolve) => (firstReply = resolve));
+    const port = {
+      postMessage: (data: unknown) => {
+        replies.push(structuredClone(data));
+        firstReply();
+      },
+    } as unknown as MessagePort;
+    this.pageClient.postMessage(message, [port]);
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    await Promise.race([replied, new Promise<void>((resolve) => (timer = setTimeout(resolve, timeoutMs)))]);
+    clearTimeout(timer);
+    await new Promise((resolve) => setTimeout(resolve, 0));
     return replies;
   }
 
