@@ -183,6 +183,7 @@ export class FakeServiceWorkerRuntime {
 
   /** Resolves once every waitUntil promise from messages posted to workers so far has settled. */
   async idle(): Promise<void> {
+    await nextTask();
     while (this.pendingWork.size > 0) await Promise.allSettled([...this.pendingWork]);
   }
 

@@ -114,6 +114,33 @@ export function decodeRuntimeConfig(search: string): RuntimeConfig | null {
   }
 }
 
+/**
+ * Pages on a library older than the script-URL config post their config in
+ * a CONFIG message instead. Maps that payload onto the wire format so it
+ * passes the same validation. Returns null for anything unusable.
+ */
+export function parseLegacyConfigMessage(payload: unknown): RuntimeConfig | null {
+  if (!isRecord(payload)) return null;
+  const patterns = isRecord(payload.assetPatterns) ? payload.assetPatterns : {};
+  const p: Record<string, unknown> = {};
+  for (const key of PATTERN_KEYS) {
+    const pattern = patterns[key];
+    if (pattern !== undefined) p[key] = pattern instanceof RegExp ? [pattern.source, pattern.flags] : pattern;
+  }
+  const tokenConfig = isRecord(payload.tokenConfig) ? payload.tokenConfig : {};
+  const api = isRecord(payload.api) ? payload.api : {};
+  return parseWire({
+    v: 1,
+    ns: payload.namespace,
+    d: payload.protectedDomains,
+    p,
+    x: api.proxyEndpoint,
+    t: { rt: tokenConfig.refreshThreshold },
+    c: payload.cacheStrategies,
+    dbg: payload.debug === true ? 1 : undefined,
+  });
+}
+
 function parseWire(wire: unknown): RuntimeConfig | null {
   if (!isRecord(wire) || wire.v !== 1) return null;
   const { ns, d, p, x, t, c, dbg } = wire;

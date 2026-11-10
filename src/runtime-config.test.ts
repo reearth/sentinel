@@ -3,6 +3,7 @@ import {
   CONFIG_PARAM,
   decodeRuntimeConfig,
   encodeRuntimeConfig,
+  parseLegacyConfigMessage,
   serviceWorkerScriptUrl,
   toRuntimeConfig,
 } from './runtime-config.js';
@@ -123,6 +124,31 @@ describe('runtime config in the service worker script URL', () => {
 
   it.each([NaN, Infinity, -Infinity])('rejects a refreshThreshold of %s', (refreshThreshold) => {
     expect(() => toRuntimeConfig({ ...visualizer, tokenConfig: { refreshThreshold } })).toThrow(/refreshThreshold/);
+  });
+
+  it("maps an older library's CONFIG payload through the same validation", () => {
+    const payload = {
+      namespace: 'reearth-visualizer',
+      protectedDomains: ['tiles.example.com'],
+      assetPatterns: { rasterTiles: /\/imagery\//i },
+      tokenConfig: { memoryCacheTTL: 300_000, refreshThreshold: 45_000 },
+      cacheStrategies: { tiles: 'cache-first', images: 'yolo' },
+      api: { proxyEndpoint: 'https://tiles.example.com' },
+      debug: true,
+    };
+
+    expect(parseLegacyConfigMessage(structuredClone(payload))).toEqual({
+      namespace: 'reearth-visualizer',
+      protectedDomains: ['tiles.example.com'],
+      assetPatterns: { rasterTiles: /\/imagery\//i },
+      proxyEndpoint: 'https://tiles.example.com',
+      token: { refreshThreshold: 45_000 },
+      cacheStrategies: { tiles: 'cache-first' },
+      debug: true,
+    });
+    expect(parseLegacyConfigMessage({ ...payload, namespace: undefined })).toBeNull();
+    expect(parseLegacyConfigMessage({ ...payload, assetPatterns: { rasterTiles: 'imagery' } })).toBeNull();
+    expect(parseLegacyConfigMessage(undefined)).toBeNull();
   });
 
   it('keeps other query params on serviceWorkerPath', () => {

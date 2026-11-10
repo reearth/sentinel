@@ -149,3 +149,69 @@ describe('protected tile requests stay authenticated', () => {
     expect(rt.toPage.filter((m) => (m as { type?: string }).type === 'REQUEST_TOKEN')).toEqual([]);
   });
 });
+
+describe('pages on an older library, which configure the worker by CONFIG message', () => {
+  let rt: FakeServiceWorkerRuntime;
+
+  beforeEach(() => {
+    rt = new FakeServiceWorkerRuntime();
+    rt.installPageGlobals();
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  /** What 0.1.x registerAssetSecurity() and updateToken() post on every page load. */
+  async function oldLibraryPageLoad(namespace = 'reearth-visualizer') {
+    const active = (await navigator.serviceWorker.getRegistration())!.active!;
+    active.postMessage({
+      type: 'CONFIG',
+      payload: {
+        namespace,
+        protectedDomains: ['tiles.example.com'],
+        assetPatterns: { rasterTiles: /\/(?:cesium-mesh|imagery|google3d|v1\/3dtiles)\// },
+        tokenConfig: { memoryCacheTTL: 300_000, refreshThreshold: 60_000 },
+        cacheStrategies: undefined,
+        api: { proxyEndpoint: 'https://tiles.example.com' },
+        debug: false,
+      },
+    });
+    active.postMessage(
+      { type: 'UPDATE_TOKEN', payload: { token: { access_token: rt.validToken, expires_at: Date.now() + DAY } } },
+      [new MessageChannel().port2]
+    );
+    await rt.idle();
+  }
+
+  it('a bare /sw.js updated to this worker is configured by the old page and authenticates tiles', async () => {
+    await navigator.serviceWorker.register('/sw.js', { scope: '/' });
+    await rt.updateCheck();
+    expect(rt.activeScriptURL).toBe('https://app.example.com/sw.js');
+
+    await oldLibraryPageLoad();
+
+    expect((await rt.fetch(TILE)).status).toBe(200);
+    expect(rt.lastUpstreamAuth()).toBe(`Bearer ${rt.validToken}`);
+  });
+
+  it('a worker configured by its script URL ignores CONFIG messages', async () => {
+    const page = await loadPage();
+    await page.registerAssetSecurity(visualizerConfig());
+    await page.updateToken({ accessToken: rt.validToken, expiresAt: Date.now() + DAY });
+
+    await oldLibraryPageLoad('someone-else');
+
+    expect((await rt.fetch(TILE)).status).toBe(200);
+    expect(rt.lastUpstreamAuth()).toBe(`Bearer ${rt.validToken}`);
+  });
+
+  it('warns even without debug when the script URL carries a config it cannot read', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    await navigator.serviceWorker.register('/sw.js?sentinel=not-a-config', { scope: '/' });
+
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('sentinel'));
+  });
+});

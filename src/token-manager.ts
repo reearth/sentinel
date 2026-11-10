@@ -22,6 +22,7 @@ export const TOKEN_ACQUISITION_BACKOFF_MS = 15_000;
 export class TokenManager implements ITokenManager {
   private memoryCache: TokenStorageEntry | null = null;
   private dbPromise: Promise<IDBPDatabase<AuthDB>> | null = null;
+  private dbName = '';
 
   /** Shared in-flight fresh-token request — the SW is a single context,
    *  so concurrent intercepted requests await one round trip instead of
@@ -32,12 +33,16 @@ export class TokenManager implements ITokenManager {
 
   /** Every caller awaits the same open, so concurrent first requests all see the connection. */
   private db(): Promise<IDBPDatabase<AuthDB>> {
-    if (this.dbPromise) return this.dbPromise;
+    const name = getIndexedDBName();
+    if (this.dbPromise && this.dbName === name) return this.dbPromise;
+    // A CONFIG message from an older page can change the namespace after start.
+    this.dbPromise?.then((db) => db.close(), () => {});
+    this.dbName = name;
     // A failed or closed connection must not poison every later lookup until the worker restarts.
     const forget = () => {
       if (this.dbPromise === opening) this.dbPromise = null;
     };
-    const opening: Promise<IDBPDatabase<AuthDB>> = openDB<AuthDB>(getIndexedDBName(), 1, {
+    const opening: Promise<IDBPDatabase<AuthDB>> = openDB<AuthDB>(name, 1, {
       upgrade(db) {
         if (!db.objectStoreNames.contains('tokens')) {
           db.createObjectStore('tokens');

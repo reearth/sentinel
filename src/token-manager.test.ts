@@ -3,6 +3,12 @@ import * as fakeIndexedDB from 'fake-indexeddb';
 import { openDB } from 'idb';
 import { TokenManager, TOKEN_ACQUISITION_BACKOFF_MS } from './token-manager.js';
 import { WORKER_TOKEN_WAIT_MS } from './token-provider.js';
+import { configure } from './config.js';
+import { toRuntimeConfig } from './runtime-config.js';
+
+function runtime(namespace: string) {
+  return toRuntimeConfig({ proxyUrl: 'https://p.example.com', protectedDomains: ['a.example.com'], namespace, debug: false });
+}
 
 /**
  * Fake SW clients list. `respond` controls whether the page answers the
@@ -232,6 +238,20 @@ describe('TokenManager token store connection', () => {
     await tm.setToken({ access_token: 'tok-2', expires_at: Date.now() + 3600_000 });
 
     expect(await new TokenManager().getToken()).toBe('tok-2');
+  });
+
+  it('follows a namespace change to that namespace\'s token store', async () => {
+    const tm = new TokenManager();
+    configure(runtime('first-app'));
+    await tm.setToken({ access_token: 'tok-first', expires_at: Date.now() + 3600_000 });
+
+    configure(runtime('second-app'));
+    await tm.setToken({ access_token: 'tok-second', expires_at: Date.now() + 3600_000 });
+
+    const stored = await openDB('second-app-auth', 1);
+    expect((await stored.get('tokens', 'current'))?.token).toBe('tok-second');
+    stored.close();
+    configure(null);
   });
 
   it('closes its connection instead of blocking a newer version of the store', async () => {

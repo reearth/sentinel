@@ -9,7 +9,7 @@ import {
   getCacheName,
   isStaleCacheName,
 } from './config';
-import { decodeRuntimeConfig } from './runtime-config';
+import { CONFIG_PARAM, decodeRuntimeConfig, parseLegacyConfigMessage } from './runtime-config';
 import type { ServiceWorkerMessage, Token } from './types';
 
 declare const self: ServiceWorkerGlobalScope;
@@ -17,7 +17,13 @@ declare const self: ServiceWorkerGlobalScope;
 // Before any listener: the browser re-evaluates this script whenever it
 // restarts an idle worker, and the first event after that must already see
 // the config. The registration's script URL is the only copy that survives.
-configure(decodeRuntimeConfig(self.location.search));
+const urlConfig = decodeRuntimeConfig(self.location.search);
+if (!urlConfig && new URLSearchParams(self.location.search).has(CONFIG_PARAM)) {
+  console.warn(
+    `[ServiceWorker] The "${CONFIG_PARAM}" config in the script URL is unreadable; protected requests will not be authenticated`
+  );
+}
+configure(urlConfig);
 
 /**
  * Service Worker installation
@@ -82,10 +88,21 @@ async function handleMessage(event: ExtendableMessageEvent): Promise<void> {
   debugLog('[ServiceWorker] Received message:', message.type);
 
   switch (message.type) {
-    case 'CONFIG':
-      // Pages still running an older library send this; the script URL wins.
-      debugWarn('[ServiceWorker] Ignoring CONFIG message: config travels in the script URL');
+    case 'CONFIG': {
+      // Only pages on an older library send this. They registered a bare
+      // script URL, which the browser's update check can fill with this
+      // worker, so it is the only config such a worker can get. A config in
+      // the script URL always wins.
+      if (urlConfig) {
+        debugWarn('[ServiceWorker] Ignoring CONFIG message: config travels in the script URL');
+        break;
+      }
+      const legacy = parseLegacyConfigMessage(message.payload);
+      if (legacy) configure(legacy);
+      else debugWarn('[ServiceWorker] Ignoring unreadable CONFIG message');
+      event.ports[0]?.postMessage({ success: !!legacy });
       break;
+    }
 
     case 'UPDATE_TOKEN':
       if (message.payload?.token) {
