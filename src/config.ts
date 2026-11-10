@@ -1,14 +1,12 @@
 import type { ServiceWorkerConfig, AssetType } from './types';
-
-/**
- * Runtime configuration namespace - can be updated via updateConfig()
- */
-let NAMESPACE = 'asset-security';
+import type { RuntimeConfig } from './runtime-config';
 
 /**
  * Default configuration with sensible defaults
  */
 const DEFAULT_CONFIG: ServiceWorkerConfig = {
+  namespace: 'asset-security',
+
   // Domains that require authentication - MUST be configured by the application
   protectedDomains: [],
 
@@ -24,7 +22,6 @@ const DEFAULT_CONFIG: ServiceWorkerConfig = {
   // Token management configuration
   token: {
     memoryCacheTTL: 5 * 60 * 1000, // 5 minutes
-    indexedDBName: '', // Will be set dynamically based on namespace
     indexedDBStore: 'tokens',
     refreshThreshold: 60 * 1000, // Refresh if less than 1 minute remaining
   },
@@ -38,7 +35,6 @@ const DEFAULT_CONFIG: ServiceWorkerConfig = {
 
   // Cache settings
   cache: {
-    name: '', // Will be set dynamically based on namespace
     maxAge: 3600, // 1 hour in seconds
     strategies: {
       images: 'cache-first',
@@ -51,47 +47,29 @@ const DEFAULT_CONFIG: ServiceWorkerConfig = {
   debug: false,
 };
 
-/**
- * Mutable runtime configuration
- */
-export let CONFIG: ServiceWorkerConfig = { ...DEFAULT_CONFIG };
+export let CONFIG: ServiceWorkerConfig = DEFAULT_CONFIG;
 
 /**
- * Update configuration with namespace and custom settings
+ * Replace the configuration. null (an unconfigured worker) restores the
+ * defaults, which intercept nothing.
  */
-export function updateConfig(config: Partial<ServiceWorkerConfig> & { namespace?: string }) {
-  // Update namespace if provided
-  if (config.namespace) {
-    NAMESPACE = config.namespace;
-  }
+export function configure(runtime: RuntimeConfig | null): void {
+  CONFIG = runtime
+    ? {
+        ...DEFAULT_CONFIG,
+        namespace: runtime.namespace,
+        protectedDomains: [...runtime.protectedDomains],
+        assetPatterns: { ...DEFAULT_CONFIG.assetPatterns, ...runtime.assetPatterns },
+        token: { ...DEFAULT_CONFIG.token, ...runtime.token },
+        api: { ...DEFAULT_CONFIG.api, proxyEndpoint: runtime.proxyEndpoint },
+        cache: {
+          ...DEFAULT_CONFIG.cache,
+          strategies: { ...DEFAULT_CONFIG.cache.strategies, ...runtime.cacheStrategies },
+        },
+        debug: runtime.debug,
+      }
+    : DEFAULT_CONFIG;
 
-  // Merge custom config with defaults
-  CONFIG = {
-    ...DEFAULT_CONFIG,
-    ...config,
-    token: {
-      ...DEFAULT_CONFIG.token,
-      ...config.token,
-      indexedDBName: `${NAMESPACE}-auth`,
-    },
-    cache: {
-      ...DEFAULT_CONFIG.cache,
-      ...config.cache,
-      name: `${NAMESPACE}-v1`,
-      strategies: {
-        ...DEFAULT_CONFIG.cache.strategies,
-        ...config.cache?.strategies,
-      },
-    },
-    protectedDomains: config.protectedDomains || DEFAULT_CONFIG.protectedDomains,
-    assetPatterns: {
-      ...DEFAULT_CONFIG.assetPatterns,
-      ...config.assetPatterns,
-    },
-    extractAssetId: config.extractAssetId,
-  };
-
-  // Validation: warn if required config is missing
   if (CONFIG.protectedDomains.length === 0) {
     debugWarn('[ServiceWorker] Warning: No protected domains configured. Authentication will not be applied.');
   }
@@ -100,7 +78,7 @@ export function updateConfig(config: Partial<ServiceWorkerConfig> & { namespace?
     debugWarn('[ServiceWorker] Warning: No proxy endpoint configured. Signed URL functionality will not work.');
   }
 
-  debugLog(`[ServiceWorker] Configuration updated with namespace: ${NAMESPACE}`, CONFIG);
+  debugLog(`[ServiceWorker] Configured with namespace: ${CONFIG.namespace}`, CONFIG);
 }
 
 export function isDebugEnabled(): boolean {
@@ -135,18 +113,15 @@ export function debugError(...args: unknown[]): void {
  * Get current cache name (dynamically generated)
  */
 export function getCacheName(): string {
-  return CONFIG.cache.name || `${NAMESPACE}-v1`;
+  return `${CONFIG.namespace}-v1`;
 }
 
 /**
  * Get current IndexedDB name (dynamically generated)
  */
 export function getIndexedDBName(): string {
-  return CONFIG.token.indexedDBName || `${NAMESPACE}-auth`;
+  return `${CONFIG.namespace}-auth`;
 }
-
-// Initialize with default namespace
-updateConfig({});
 
 /**
  * Check if a URL requires authentication
@@ -203,12 +178,6 @@ export function getAssetType(url: URL | string): AssetType {
 export function extractAssetUUID(url: URL | string): string | null {
   const urlObj = typeof url === 'string' ? new URL(url) : url;
 
-  // Use custom extractor if provided
-  if (CONFIG.extractAssetId) {
-    return CONFIG.extractAssetId(urlObj);
-  }
-
-  // Default behavior: extract UUID-like patterns from path
   const pathname = urlObj.pathname;
 
   // Pattern: any UUID-like string (8-4-4-4-12 hex digits)

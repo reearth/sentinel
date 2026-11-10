@@ -3,14 +3,20 @@ import { tokenManager } from './token-manager';
 import { requestInterceptor } from './request-interceptor';
 import { handleRequest } from './strategies';
 import {
+  configure,
   debugLog,
   debugWarn,
   getCacheName,
-  updateConfig,
 } from './config';
+import { decodeRuntimeConfig } from './runtime-config';
 import type { ServiceWorkerMessage, Token } from './types';
 
 declare const self: ServiceWorkerGlobalScope;
+
+// Before any listener: the browser re-evaluates this script whenever it
+// restarts an idle worker, and the first event after that must already see
+// the config. The registration's script URL is the only copy that survives.
+configure(decodeRuntimeConfig(self.location.search));
 
 /**
  * Service Worker installation
@@ -77,11 +83,8 @@ self.addEventListener('message', async (event) => {
 
   switch (message.type) {
     case 'CONFIG':
-      // Update service worker configuration
-      if (message.payload) {
-        updateConfig(message.payload);
-        event.ports[0]?.postMessage({ success: true });
-      }
+      // Pages still running an older library send this; the script URL wins.
+      debugWarn('[ServiceWorker] Ignoring CONFIG message: config travels in the script URL');
       break;
 
     case 'UPDATE_TOKEN':

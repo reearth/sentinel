@@ -31,6 +31,7 @@ export interface ProxyResponse {
 }
 
 export interface ServiceWorkerConfig {
+  namespace: string;
   protectedDomains: string[];
   assetPatterns: {
     customAssets: RegExp;
@@ -40,7 +41,6 @@ export interface ServiceWorkerConfig {
   };
   token: {
     memoryCacheTTL: number;
-    indexedDBName: string;
     indexedDBStore: string;
     refreshThreshold: number;
   };
@@ -50,7 +50,6 @@ export interface ServiceWorkerConfig {
     proxyEndpoint: string;
   };
   cache: {
-    name: string;
     maxAge: number;
     strategies: {
       images: CacheStrategy;
@@ -59,7 +58,6 @@ export interface ServiceWorkerConfig {
     };
   };
   debug: boolean;
-  extractAssetId?: (url: URL) => string | null;
 }
 
 export type CacheStrategy = 'cache-first' | 'network-first' | 'network-only' | 'cache-only';

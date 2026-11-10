@@ -5,6 +5,7 @@ import type {
   RegistrationResult,
   SecurityEvent,
 } from './public-types.js';
+import { serviceWorkerScriptUrl, toRuntimeConfig } from './runtime-config.js';
 
 // Global state
 let swRegistration: ServiceWorkerRegistration | null = null;
@@ -74,7 +75,7 @@ export async function registerAssetSecurity(
     }
 
     // Merge with defaults - ensure all optional fields have values
-    config = {
+    const resolved = {
       ...userConfig,
       namespace: userConfig.namespace ?? 'asset-security',
       scope: userConfig.scope ?? '/',
@@ -83,68 +84,36 @@ export async function registerAssetSecurity(
         userConfig.serviceWorkerControlTimeout ?? DEFAULT_SERVICE_WORKER_CONTROL_TIMEOUT,
       debug: userConfig.debug ?? false,
     };
+    config = resolved;
 
     // Register event listeners
     if (config.onSecurityEvent) {
       eventListeners.add(config.onSecurityEvent);
     }
 
-    debugLog('[AssetSecurity] Registering with config:', config);
-
-    // Check if already registered
-    const existingRegistration = await navigator.serviceWorker.getRegistration(
-      config.scope
-    );
-
-    if (existingRegistration) {
-      swRegistration = existingRegistration;
-
-      debugLog('[AssetSecurity] Service worker already registered');
-
-      // Send configuration to existing service worker
-      await waitForServiceWorkerActive(existingRegistration);
-      await sendConfigToServiceWorker();
-      await waitForServiceWorkerControl(
-        existingRegistration,
-        config.serviceWorkerControlTimeout
-      );
-
-      emitEvent({
-        type: 'registration:success',
-        timestamp: Date.now(),
-        data: { existing: true },
-      });
-
-      return { success: true, registration: existingRegistration };
+    if (config.extractAssetId) {
+      debugWarn('[AssetSecurity] extractAssetId is deprecated and ignored: functions cannot reach the service worker');
     }
 
-    // Register new service worker (serviceWorkerPath is guaranteed by defaults above)
+    debugLog('[AssetSecurity] Registering with config:', config);
+
+    ensureMessageListener();
+
+    const existing = !!navigator.serviceWorker.controller;
+    // Same config, same URL: the browser keeps the running worker. A changed
+    // config, or a legacy bare serviceWorkerPath, installs a new one.
     swRegistration = await navigator.serviceWorker.register(
-      config.serviceWorkerPath!,
-      {
-        scope: config.scope!,
-      }
+      serviceWorkerScriptUrl(resolved.serviceWorkerPath, toRuntimeConfig(resolved)),
+      { scope: resolved.scope }
     );
 
-    debugLog('[AssetSecurity] Service worker registered successfully');
-
-    // Wait for service worker to become active
     await waitForServiceWorkerActive(swRegistration);
-
-    // Send configuration to service worker
-    await sendConfigToServiceWorker();
-    await waitForServiceWorkerControl(
-      swRegistration,
-      config.serviceWorkerControlTimeout
-    );
-
-    // Set up message listener from service worker
-    setupMessageListener();
+    await waitForServiceWorkerControl(swRegistration, resolved.serviceWorkerControlTimeout);
 
     emitEvent({
       type: 'registration:success',
       timestamp: Date.now(),
-      data: { existing: false },
+      data: { existing },
     });
 
     return { success: true, registration: swRegistration };
@@ -295,31 +264,11 @@ async function waitForServiceWorkerControl(
   });
 }
 
-async function sendConfigToServiceWorker(): Promise<void> {
-  if (!swRegistration?.active || !config) {
-    return;
-  }
+let listening = false;
 
-  // Send configuration to service worker
-  swRegistration.active.postMessage({
-    type: 'CONFIG',
-    payload: {
-      namespace: config.namespace,
-      protectedDomains: config.protectedDomains,
-      assetPatterns: config.assetPatterns,
-      extractAssetId: config.extractAssetId,
-      tokenConfig: config.tokenConfig,
-      cacheStrategies: config.cacheStrategies,
-      api: {
-        proxyEndpoint: config.proxyUrl,
-      },
-      debug: config.debug,
-    },
-  });
-}
-
-function setupMessageListener(): void {
-  if (!config) return;
+function ensureMessageListener(): void {
+  if (listening) return;
+  listening = true;
 
   navigator.serviceWorker.addEventListener('message', (event) => {
     const { type, payload } = event.data;

@@ -4,12 +4,22 @@ import {
   debugError,
   debugLog,
   debugWarn,
-  updateConfig,
+  configure,
 } from './config.js';
+import { toRuntimeConfig } from './runtime-config.js';
+
+function runtime(debug: boolean) {
+  return toRuntimeConfig({
+    proxyUrl: 'https://proxy.example.com',
+    protectedDomains: ['assets.example.com'],
+    namespace: 'asset-security',
+    debug,
+  });
+}
 
 describe('service worker debug logging', () => {
   afterEach(() => {
-    updateConfig({ debug: false });
+    configure(null);
     vi.restoreAllMocks();
   });
 
@@ -19,7 +29,7 @@ describe('service worker debug logging', () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const error = vi.spyOn(console, 'error').mockImplementation(() => {});
 
-    updateConfig({ debug: false });
+    configure(runtime(false));
     debugLog('log message');
     debugDebug('debug message');
     debugWarn('warn message');
@@ -37,15 +47,7 @@ describe('service worker debug logging', () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const error = vi.spyOn(console, 'error').mockImplementation(() => {});
 
-    updateConfig({
-      debug: true,
-      protectedDomains: ['assets.example.com'],
-      api: {
-        tokenEndpoint: '/api/auth/token',
-        refreshEndpoint: '/api/auth/refresh',
-        proxyEndpoint: 'https://proxy.example.com',
-      },
-    });
+    configure(runtime(true));
     vi.clearAllMocks();
 
     debugLog('log message');

@@ -1,9 +1,23 @@
 import { vi } from 'vitest';
-import { IDBFactory } from 'fake-indexeddb';
+import * as fakeIndexedDB from 'fake-indexeddb';
 
 type Handler = (event: any) => void;
 
 const ORIGIN = 'https://app.example.com';
+
+const IDB_INTERFACES = [
+  'IDBCursor',
+  'IDBCursorWithValue',
+  'IDBDatabase',
+  'IDBFactory',
+  'IDBIndex',
+  'IDBKeyRange',
+  'IDBObjectStore',
+  'IDBOpenDBRequest',
+  'IDBRequest',
+  'IDBTransaction',
+  'IDBVersionChangeEvent',
+] as const;
 
 /**
  * Just enough of a browser's service worker machinery to run the real
@@ -15,14 +29,20 @@ const ORIGIN = 'https://app.example.com';
  *   idle worker: install/activate do NOT run again, module memory is gone,
  *   IndexedDB and Cache Storage survive, and `self.location` is the
  *   registered script URL.
- * - postMessage structured-clones its payload in both directions.
+ * - postMessage structured-clones its payload in both directions, and the
+ *   worker receives it as an ExtendableMessageEvent (it has waitUntil).
+ * - The worker global has the full IndexedDB interface set, not just the
+ *   `indexedDB` factory: the idb library does instanceof checks against them.
  * - Upstream answers 401 unless the request carries the valid bearer token.
  */
 export class FakeServiceWorkerRuntime {
   readonly upstream: Request[] = [];
+  readonly toPage: unknown[] = [];
+  readonly toWorker: unknown[] = [];
+  idbOpens = 0;
   validToken = 'tok-valid';
 
-  private readonly idb = new IDBFactory();
+  private readonly idb = this.countingIDBFactory();
   private readonly cacheStore = new Map<string, Map<string, Response>>();
   private swHandlers = new Map<string, Handler[]>();
   private pageHandlers = new Map<string, Set<Handler>>();
@@ -33,6 +53,7 @@ export class FakeServiceWorkerRuntime {
   private readonly pageClient = {
     id: 'page-1',
     postMessage: (data: unknown, ports: MessagePort[] = []) => {
+      this.toPage.push(structuredClone(data));
       const event = { data: structuredClone(data), ports };
       queueMicrotask(() => this.pageHandlers.get('message')?.forEach((h) => h(event)));
     },
@@ -68,14 +89,26 @@ export class FakeServiceWorkerRuntime {
     return responded;
   }
 
+  /** Post a message to the page the way the worker does (clients[0].postMessage) and collect replies on its port. */
+  async askPage(message: unknown, settleMs = 20): Promise<unknown[]> {
+    const channel = new MessageChannel();
+    const replies: unknown[] = [];
+    channel.port1.onmessage = (event) => replies.push(event.data);
+    this.pageClient.postMessage(message, [channel.port2]);
+    await new Promise((resolve) => setTimeout(resolve, settleMs));
+    channel.port1.close();
+    return replies;
+  }
+
   lastUpstreamAuth(): string | null {
-    return this.upstream.at(-1)?.headers.get('authorization') ?? null;
+    return this.upstream[this.upstream.length - 1]?.headers.get('authorization') ?? null;
   }
 
   private async evaluateScript(): Promise<void> {
     this.swHandlers = new Map();
     vi.resetModules();
     vi.stubGlobal('indexedDB', this.idb);
+    for (const name of IDB_INTERFACES) vi.stubGlobal(name, fakeIndexedDB[name]);
     vi.stubGlobal('caches', this.cacheStorage());
     vi.stubGlobal('fetch', async (input: RequestInfo, init?: RequestInit) => {
       const req = new Request(input, init);
@@ -126,7 +159,8 @@ export class FakeServiceWorkerRuntime {
       scriptURL: this.scriptURL,
       state: 'activated',
       postMessage: (data: unknown, transfer: MessagePort[] = []) => {
-        const event = { data: structuredClone(data), ports: transfer, source: this.pageClient };
+        this.toWorker.push(structuredClone(data));
+        const event = { data: structuredClone(data), ports: transfer, source: this.pageClient, waitUntil: () => {} };
         queueMicrotask(() => this.dispatch('message', event));
       },
       addEventListener() {},
@@ -176,6 +210,16 @@ export class FakeServiceWorkerRuntime {
   /** Simulate a page reload: page module state is gone, the registration and its worker remain. */
   reloadPage(): void {
     this.pageHandlers = new Map();
+  }
+
+  private countingIDBFactory(): IDBFactory {
+    const factory = new fakeIndexedDB.IDBFactory();
+    const open = factory.open.bind(factory);
+    factory.open = (name: string, version?: number) => {
+      this.idbOpens++;
+      return open(name, version);
+    };
+    return factory;
   }
 
   private cacheStorage(): CacheStorage {

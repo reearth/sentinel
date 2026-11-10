@@ -86,9 +86,6 @@ describe('@reearth/sentinel public API', () => {
     });
 
     expect(serviceWorker.controller).toBeTruthy();
-    expect(postMessage).toHaveBeenCalledWith(
-      expect.objectContaining({ type: 'CONFIG' })
-    );
     expect(postMessage).toHaveBeenCalledWith({ type: 'CLAIM_CLIENTS' });
   });
 
