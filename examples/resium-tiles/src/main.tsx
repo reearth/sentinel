@@ -35,7 +35,6 @@ async function refreshToken(): Promise<void> {
 
 async function boot() {
   window.__expiredCallbackCount = 0;
-  // Mirrors reearth-visualizer's production config.
   await registerAssetSecurity({
     proxyUrl: TILE_ORIGIN,
     protectedDomains: [new URL(TILE_ORIGIN).host],

@@ -48,10 +48,6 @@ const DEFAULT_CONFIG: ServiceWorkerConfig = {
 
 export let CONFIG: ServiceWorkerConfig = DEFAULT_CONFIG;
 
-/**
- * Replace the configuration. null (an unconfigured worker) restores the
- * defaults, which intercept nothing.
- */
 export function configure(runtime: RuntimeConfig | null): void {
   CONFIG = runtime
     ? {
@@ -115,7 +111,6 @@ export function getCacheName(): string {
   return `${CONFIG.namespace}-v1`;
 }
 
-/** An earlier cache version of this namespace. Other caches on the origin belong to someone else. */
 export function isStaleCacheName(name: string): boolean {
   const prefix = `${CONFIG.namespace}-v`;
   return name !== getCacheName() && name.startsWith(prefix) && /^\d+$/.test(name.slice(prefix.length));

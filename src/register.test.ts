@@ -36,7 +36,7 @@ describe('registerAssetSecurity', () => {
     const page = await loadPage();
     await page.registerAssetSecurity(config);
 
-    const url = new URL(rt.registeredScriptURL!);
+    const url = new URL(rt.newestScriptURL!);
     expect(url.pathname).toBe('/sw.js');
     expect(decodeRuntimeConfig(url.search)).toEqual(
       toRuntimeConfig({ ...config, namespace: 'reearth-visualizer', debug: false })
@@ -45,14 +45,14 @@ describe('registerAssetSecurity', () => {
 
   it('re-registers an existing bare /sw.js registration with the config URL', async () => {
     await navigator.serviceWorker.register('/sw.js', { scope: '/' });
-    expect(rt.registeredScriptURL).toBe('https://app.example.com/sw.js');
+    expect(rt.newestScriptURL).toBe('https://app.example.com/sw.js');
 
     const page = await loadPage();
     expect((await page.registerAssetSecurity(config)).success).toBe(true);
     await page.updateToken({ accessToken: rt.validToken, expiresAt: Date.now() + DAY });
     await rt.restart();
 
-    expect(rt.registeredScriptURL).toContain('/sw.js?sentinel=');
+    expect(rt.newestScriptURL).toContain('/sw.js?sentinel=');
     expect((await rt.fetch(TILE)).status).toBe(200);
     expect(rt.lastUpstreamAuth()).toBe(`Bearer ${rt.validToken}`);
   });
@@ -78,10 +78,10 @@ describe('registerAssetSecurity', () => {
       await page.updateToken({ accessToken: rt.validToken, expiresAt: Date.now() + DAY });
     });
     await page.registerAssetSecurity({ ...config, onTokenExpired });
-    const firstUrl = rt.registeredScriptURL;
+    const firstUrl = rt.newestScriptURL;
     await page.registerAssetSecurity({ ...config, onTokenExpired });
 
-    expect(rt.registeredScriptURL).toBe(firstUrl);
+    expect(rt.newestScriptURL).toBe(firstUrl);
 
     const replies = await rt.askPage({ type: 'REQUEST_TOKEN' });
     expect(replies).toHaveLength(1);
@@ -92,14 +92,14 @@ describe('registerAssetSecurity', () => {
   it('answers token requests when the page reuses an existing registration', async () => {
     const first = await loadPage();
     await first.registerAssetSecurity(config);
-    const scriptUrl = rt.registeredScriptURL;
+    const scriptUrl = rt.newestScriptURL;
 
     rt.reloadPage();
     const page = await loadPage();
     await page.registerAssetSecurity(config);
     await page.updateToken({ accessToken: rt.validToken, expiresAt: Date.now() + DAY });
 
-    expect(rt.registeredScriptURL).toBe(scriptUrl);
+    expect(rt.newestScriptURL).toBe(scriptUrl);
     expect(await rt.askPage({ type: 'REQUEST_TOKEN' })).toEqual([
       expect.objectContaining({ type: 'TOKEN_PROVIDED', token: expect.objectContaining({ access_token: rt.validToken }) }),
     ]);
@@ -109,7 +109,7 @@ describe('registerAssetSecurity', () => {
     const first = await loadPage();
     await first.registerAssetSecurity(config);
     await first.updateToken({ accessToken: rt.validToken, expiresAt: Date.now() + DAY });
-    const urlA = rt.registeredScriptURL;
+    const urlA = rt.newestScriptURL;
 
     rt.reloadPage();
     const page = await loadPage();
@@ -119,8 +119,8 @@ describe('registerAssetSecurity', () => {
     });
 
     expect(result.success).toBe(true);
-    expect(rt.registeredScriptURL).not.toBe(urlA);
-    expect(rt.controllerScriptURL).toBe(rt.registeredScriptURL);
+    expect(rt.newestScriptURL).not.toBe(urlA);
+    expect(rt.controllerScriptURL).toBe(rt.newestScriptURL);
     expect((await rt.fetch('https://tiles.other.example/imagery/x/1/2/3.png')).status).toBe(200);
     expect(rt.lastUpstreamAuth()).toBe(`Bearer ${rt.validToken}`);
   });
@@ -146,7 +146,7 @@ describe('registerAssetSecurity', () => {
 
     expect(result.success).toBe(false);
     expect(onRegistrationError).toHaveBeenCalledWith(expect.any(Error));
-    expect(rt.registeredScriptURL).toBeNull();
+    expect(rt.newestScriptURL).toBeNull();
   });
 
   it('waits for the installing worker, not the old active one', async () => {

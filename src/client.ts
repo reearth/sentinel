@@ -14,6 +14,8 @@ import {
 import { forgetToken, rememberToken } from './token-provider.js';
 import type { Token } from './types.js';
 
+const DEFAULT_TOKEN_LIFETIME_MS = 60 * 60 * 1000;
+
 /**
  * Update the authentication token in the service worker
  *
@@ -44,11 +46,10 @@ export async function updateToken(
   try {
     const token: Token = {
       access_token: options.accessToken,
-      expires_at: options.expiresAt || Date.now() + 3600000, // Default 1 hour
+      expires_at: options.expiresAt || Date.now() + DEFAULT_TOKEN_LIFETIME_MS,
       refresh_token: options.refreshToken,
       scope: options.scope,
     };
-    // Before the post: a REQUEST_TOKEN racing the ack must already see it.
     rememberToken(token);
 
     const messageChannel = new MessageChannel();

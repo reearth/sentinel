@@ -2,10 +2,10 @@ import type { AssetSecurityConfig } from './public-types.js';
 import type { CacheStrategy } from './types.js';
 
 /**
- * What the service worker needs to know, already parsed. It travels in the
- * worker's script URL: the browser persists that URL with the registration
- * and restores it on every worker start, so the config survives the browser
- * terminating an idle worker, and a config change is an ordinary SW update.
+ * Travels in the worker's script URL: the browser persists that URL with the
+ * registration and restores it on every worker start, so the config survives
+ * the browser terminating an idle worker, and a config change is an ordinary
+ * SW update.
  */
 export interface RuntimeConfig {
   readonly namespace: Namespace;
@@ -73,7 +73,6 @@ export function toRuntimeConfig(
   };
 }
 
-/** Equal configs encode to the same string, so re-registering does not reinstall the worker. */
 export function encodeRuntimeConfig(config: RuntimeConfig): string {
   const wire: WireV1 = { v: 1, ns: config.namespace, d: canonicalDomains(config.protectedDomains), p: {}, x: config.proxyEndpoint };
   for (const key of PATTERN_KEYS) {
@@ -101,8 +100,7 @@ export function serviceWorkerScriptUrl(serviceWorkerPath: string, config: Runtim
 
 /**
  * Never throws: it runs during worker script evaluation, where a throw would
- * leave every fetch on the origin without a worker. Anything unreadable,
- * including a legacy bare `/sw.js`, is null.
+ * leave every fetch on the origin without a worker.
  */
 export function decodeRuntimeConfig(search: string): RuntimeConfig | null {
   try {
@@ -114,11 +112,6 @@ export function decodeRuntimeConfig(search: string): RuntimeConfig | null {
   }
 }
 
-/**
- * Pages on a library older than the script-URL config post their config in
- * a CONFIG message instead. Maps that payload onto the wire format so it
- * passes the same validation. Returns null for anything unusable.
- */
 export function parseLegacyConfigMessage(payload: unknown): RuntimeConfig | null {
   if (!isRecord(payload)) return null;
   const patterns = isRecord(payload.assetPatterns) ? payload.assetPatterns : {};
@@ -156,8 +149,6 @@ function parseWire(wire: unknown): RuntimeConfig | null {
     assetPatterns[key] = new RegExp(entry[0], entry[1]);
   }
 
-  // Optional fields have safe defaults, so an invalid one is dropped rather
-  // than leaving the whole worker unconfigured.
   const token: { refreshThreshold?: number } = {};
   if (isRecord(t) && Number.isFinite(t.rt)) token.refreshThreshold = t.rt as number;
 
@@ -180,7 +171,6 @@ function parseWire(wire: unknown): RuntimeConfig | null {
   };
 }
 
-/** Sorted and deduplicated: the same set of domains always gives the same script URL. */
 function canonicalDomains(domains: readonly string[]): string[] {
   return [...new Set(domains)].sort();
 }

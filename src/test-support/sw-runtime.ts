@@ -5,11 +5,11 @@ type Handler = (event: any) => void;
 
 type WorkerState = 'parsed' | 'installing' | 'installed' | 'activating' | 'activated' | 'redundant';
 
-/** How a window client other than the page under test treats the worker's token requests. */
 export type OtherClientKind = 'silent' | 'unavailable';
 
 const ORIGIN = 'https://app.example.com';
 
+// The idb library does instanceof checks against these, so the worker global needs them, not just `indexedDB`.
 const IDB_INTERFACES = [
   'IDBCursor',
   'IDBCursorWithValue',
@@ -30,7 +30,6 @@ interface FakeClient {
   postMessage(data: unknown, ports?: MessagePort[]): void;
 }
 
-/** One evaluated copy of sw.ts, seen by the page as a ServiceWorker. */
 class FakeWorker {
   state: WorkerState = 'parsed';
   handlers = new Map<string, Handler[]>();
@@ -69,40 +68,6 @@ interface FakeRegistration {
   update(): Promise<void>;
 }
 
-/**
- * Just enough of a browser's service worker machinery to run the real
- * page-side API (register.ts / client.ts) against the real sw.ts.
- *
- * What it models faithfully, because the bugs live there:
- * - Each worker is a separate module instance of sw.ts. `restart()`
- *   evaluates the active worker's script again in a fresh module graph, the
- *   way a browser does after terminating an idle worker: install/activate do
- *   NOT run again, module memory is gone, IndexedDB and Cache Storage
- *   survive, and `self.location` is the registered script URL.
- * - The update lifecycle. register() with the newest worker's URL resolves
- *   with the existing registration and installs nothing. Any other URL
- *   resolves with `registration.installing` set while the old worker stays
- *   active and keeps controlling the page; the new worker then moves through
- *   installed, activating and activated on later tasks, with statechange
- *   events. It waits behind an active worker unless it called skipWaiting().
- *   Activation hands already-controlled clients to the new worker
- *   (controllerchange); clients.claim() takes uncontrolled ones.
- * - Fetches from the page go to its controller, or straight to the network
- *   when the page is uncontrolled.
- * - postMessage structured-clones its payload in both directions, and the
- *   worker receives it as an ExtendableMessageEvent whose waitUntil promises
- *   are collected (see `idle()`).
- * - Several window clients. The page under test runs the real library;
- *   `addClient()` adds tabs that never answer token requests (an older
- *   library) or answer TOKEN_UNAVAILABLE.
- * - The worker global has the full IndexedDB interface set, not just the
- *   `indexedDB` factory: the idb library does instanceof checks against them.
- * - Upstream answers 401 unless the request carries the valid bearer token.
- *
- * Not modelled: the `self` global belongs to the most recently evaluated
- * worker, so an old worker still running code reaches the new one's scope.
- * clients.claim() therefore claims for whichever worker is active.
- */
 export class FakeServiceWorkerRuntime {
   readonly upstream: Request[] = [];
   readonly toPage: unknown[] = [];
@@ -129,13 +94,11 @@ export class FakeServiceWorkerRuntime {
   };
   private readonly windowClients: FakeClient[] = [this.pageClient];
 
-  /** Install page-side globals. Call before importing register.ts/client.ts. */
   installPageGlobals(): void {
     vi.stubGlobal('navigator', { serviceWorker: this.serviceWorkerContainer() });
   }
 
-  /** Script URL of the newest worker: the one the next update check compares against. */
-  get registeredScriptURL(): string | null {
+  get newestScriptURL(): string | null {
     return this.newestWorker()?.scriptURL ?? null;
   }
 
@@ -147,7 +110,6 @@ export class FakeServiceWorkerRuntime {
     return this.controller?.scriptURL ?? null;
   }
 
-  /** Add another tab on the origin, in front of the page under test unless `at` says otherwise. */
   addClient(kind: OtherClientKind, at: 'front' | 'back' = 'front'): void {
     const client: FakeClient = {
       id: `other-${this.windowClients.length}`,
@@ -163,31 +125,24 @@ export class FakeServiceWorkerRuntime {
     else this.windowClients.push(client);
   }
 
-  /** Simulate the browser terminating the idle worker and waking it for an event. */
   async restart(): Promise<void> {
     const worker = this.registration?.active;
     if (!worker) throw new Error('nothing registered');
     await this.evaluateScript(worker);
   }
 
-  /**
-   * The browser's periodic update check found new bytes at the registered
-   * URL: install a fresh worker from the same URL. Resolves once it is active.
-   */
   async updateCheck(): Promise<void> {
-    const url = this.registeredScriptURL;
+    const url = this.newestScriptURL;
     if (!url) throw new Error('nothing registered');
     const worker = await this.runJob<FakeWorker>((resolve) => this.install(url, resolve));
     await this.whenState(worker, 'activated');
   }
 
-  /** Resolves once every waitUntil promise from messages posted to workers so far has settled. */
-  async idle(): Promise<void> {
+  async waitUntilsSettled(): Promise<void> {
     await nextTask();
     while (this.pendingWork.size > 0) await Promise.allSettled([...this.pendingWork]);
   }
 
-  /** Dispatch a fetch event the way a controlled page's subresource request would. */
   async fetch(url: string): Promise<Response> {
     const request = new Request(url);
     const worker = this.controller;
@@ -204,12 +159,6 @@ export class FakeServiceWorkerRuntime {
     return responded;
   }
 
-  /**
-   * Post a message to the page the way the worker does and collect what the
-   * page posts back on the port. Resolves once the first reply has arrived
-   * and every reply racing it in the same turn is in (so a duplicate listener
-   * still shows up as a second reply), or with nothing after `timeoutMs`.
-   */
   async askPage(message: unknown, timeoutMs = 2000): Promise<unknown[]> {
     const replies: unknown[] = [];
     let firstReply!: () => void;
@@ -240,7 +189,6 @@ export class FakeServiceWorkerRuntime {
     return [...this.cacheStore.keys()];
   }
 
-  /** Simulate a page reload: page module state is gone, the registration and its worker remain. */
   reloadPage(): void {
     this.pageHandlers = new Map();
   }
@@ -264,7 +212,6 @@ export class FakeServiceWorkerRuntime {
     return reg ? reg.installing ?? reg.waiting ?? reg.active : null;
   }
 
-  /** Jobs run one at a time, like the browser's per-scope job queue. */
   private runJob<T>(job: (resolve: (value: T) => void) => Promise<void>): Promise<T> {
     return new Promise<T>((resolve, reject) => {
       this.jobs = this.jobs.then(() => job(resolve)).catch(reject);
@@ -377,8 +324,6 @@ export class FakeServiceWorkerRuntime {
           this.controller
             ? this.windowClients.filter((c) => !options.type || options.type === 'all' || c.type === options.type)
             : [],
-        // Claims for the registration's active worker, whichever copy of the
-        // script calls it: see "Not modelled" above.
         claim: async () => {
           const active = this.registration?.active;
           if (active) this.setController(active);

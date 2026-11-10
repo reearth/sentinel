@@ -11,7 +11,6 @@ const resetStats = () => {
   stats.byZoom = {};
 };
 
-// 3x5 digit glyphs plus '/', drawn at integer scale.
 const GLYPHS = {
   0: ['111', '101', '101', '101', '111'],
   1: ['010', '110', '010', '010', '111'],
@@ -63,7 +62,6 @@ function tilePng(z, x, y) {
     px[i * 3 + 1] = g;
     px[i * 3 + 2] = b;
   }
-  // Tile border so seams between tiles are visible.
   const set = (ix, iy, v) => {
     const o = (iy * SIZE + ix) * 3;
     px[o] = px[o + 1] = px[o + 2] = v;

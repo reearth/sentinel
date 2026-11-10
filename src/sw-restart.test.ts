@@ -163,7 +163,6 @@ describe('pages on an older library, which configure the worker by CONFIG messag
     vi.restoreAllMocks();
   });
 
-  /** What 0.1.x registerAssetSecurity() and updateToken() post on every page load. */
   async function oldLibraryPageLoad(namespace = 'reearth-visualizer') {
     const active = (await navigator.serviceWorker.getRegistration())!.active!;
     active.postMessage({
@@ -182,7 +181,7 @@ describe('pages on an older library, which configure the worker by CONFIG messag
       { type: 'UPDATE_TOKEN', payload: { token: { access_token: rt.validToken, expires_at: Date.now() + DAY } } },
       [new MessageChannel().port2]
     );
-    await rt.idle();
+    await rt.waitUntilsSettled();
   }
 
   it('a bare /sw.js updated to this worker is configured by the old page and authenticates tiles', async () => {

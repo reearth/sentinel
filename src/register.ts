@@ -116,14 +116,11 @@ export async function registerAssetSecurity(
     ensureMessageListener();
 
     const scriptUrl = serviceWorkerScriptUrl(resolved.serviceWorkerPath, toRuntimeConfig(resolved));
-    // The worker would start unconfigured and intercept nothing.
     if (!decodeRuntimeConfig(scriptUrl.slice(scriptUrl.indexOf('?')))) {
       throw new Error('The service worker could not read back this configuration');
     }
 
     const existing = !!navigator.serviceWorker.controller;
-    // Same config, same URL: the browser keeps the running worker. A changed
-    // config, or a legacy bare serviceWorkerPath, installs a new one.
     swRegistration = await navigator.serviceWorker.register(scriptUrl, { scope: resolved.scope });
 
     await waitForNewestWorkerActive(swRegistration, scriptUrl, resolved.serviceWorkerControlTimeout);
@@ -202,9 +199,7 @@ export function getConfig(): AssetSecurityConfig | null {
 /**
  * Waits for the newest worker, not just any active one: when the script URL
  * changed, register() resolves while the new worker is still installing and
- * the old, differently configured one is still active. If the new worker
- * fails to install or does not activate in time, registration fails unless
- * a worker with this URL is active anyway (another tab registered it first).
+ * the old, differently configured one is still active.
  */
 async function waitForNewestWorkerActive(
   registration: ServiceWorkerRegistration,

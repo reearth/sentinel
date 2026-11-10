@@ -16,11 +16,11 @@ export interface TokenSource {
   reportError?(error: unknown): void;
 }
 
-/** How long the worker waits for the pages to answer a token request. */
 export const WORKER_TOKEN_WAIT_MS = 5000;
 
-/** Shorter than the worker's wait, so the worker hears "no" before it gives up on its own. */
-export const TOKEN_REPLY_DEADLINE_MS = WORKER_TOKEN_WAIT_MS - 2000;
+const REPLY_TRANSIT_MARGIN_MS = 2000;
+
+export const TOKEN_REPLY_DEADLINE_MS = WORKER_TOKEN_WAIT_MS - REPLY_TRANSIT_MARGIN_MS;
 
 let current: Token | null = null;
 
@@ -36,13 +36,6 @@ export function forgetToken(): void {
   current = null;
 }
 
-/**
- * Answers the worker's token requests. REQUEST_TOKEN takes the latest fresh
- * token; REFRESH_TOKEN means the server rejected the worker's token, so it
- * always renews and never hands back the token the page had before.
- * Concurrent requests share one onTokenExpired call, so a tile burst does not
- * stampede the consumer's auth endpoint. Never rejects.
- */
 export function createTokenResponder(
   source: TokenSource,
   deadlineMs = TOKEN_REPLY_DEADLINE_MS
@@ -83,7 +76,6 @@ export function createTokenResponder(
         }),
       ]);
       clearTimeout(timer);
-      // A hung onTokenExpired must not hold every later request hostage.
       if (timedOut && renewal === pending) renewal = null;
       token = fresh();
       if (refreshing && token?.access_token === before?.access_token) token = null;

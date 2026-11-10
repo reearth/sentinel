@@ -3,6 +3,8 @@ import type { Token, TokenStorageEntry, TokenManager as ITokenManager } from './
 import { debugError, debugLog, getIndexedDBName } from './config';
 import { WORKER_TOKEN_WAIT_MS } from './token-provider';
 
+declare const self: ServiceWorkerGlobalScope;
+
 interface AuthDB extends DBSchema {
   tokens: {
     key: string;
@@ -31,15 +33,12 @@ export class TokenManager implements ITokenManager {
   private inFlightRefresh: Promise<string | null> | null = null;
   private lastAcquisitionFailureAt = 0;
 
-  /** Every caller awaits the same open, so concurrent first requests all see the connection. */
   private db(): Promise<IDBPDatabase<AuthDB>> {
     const name = getIndexedDBName();
     if (this.dbPromise && this.dbName === name) return this.dbPromise;
-    // A CONFIG message from an older page can change the namespace after start.
     this.dbPromise?.then((db) => db.close(), () => {});
     this.dbName = name;
-    // A failed or closed connection must not poison every later lookup until the worker restarts.
-    const forget = () => {
+    const forgetConnection = () => {
       if (this.dbPromise === opening) this.dbPromise = null;
     };
     const opening: Promise<IDBPDatabase<AuthDB>> = openDB<AuthDB>(name, 1, {
@@ -49,12 +48,12 @@ export class TokenManager implements ITokenManager {
         }
       },
       blocking: (_current, _blocked, event) => {
-        forget();
+        forgetConnection();
         (event.target as IDBDatabase).close();
       },
-      terminated: forget,
+      terminated: forgetConnection,
     }).catch((error) => {
-      forget();
+      forgetConnection();
       throw error;
     });
     this.dbPromise = opening;
@@ -104,7 +103,6 @@ export class TokenManager implements ITokenManager {
 
     // Update memory cache
     this.memoryCache = entry;
-    // A token from the page ends any backoff from an earlier unanswered request.
     this.lastAcquisitionFailureAt = 0;
 
     // Store in IndexedDB
@@ -116,10 +114,6 @@ export class TokenManager implements ITokenManager {
     }
   }
 
-  /**
-   * The server rejected the current token: ask the pages for a different
-   * one. Single-flight, so a burst of 401s sends one REFRESH_TOKEN.
-   */
   refreshToken(): Promise<string | null> {
     this.inFlightRefresh ??= this.askForRefresh().finally(() => {
       this.inFlightRefresh = null;
@@ -187,17 +181,12 @@ export class TokenManager implements ITokenManager {
     return this.inFlightAcquisition;
   }
 
-  /**
-   * Asks every window client and takes the first token. A tab running an
-   * older library never answers and one without a token says
-   * TOKEN_UNAVAILABLE; neither may stop another tab from answering.
-   */
   private async askClients(
     message: { type: 'REQUEST_TOKEN' } | { type: 'REFRESH_TOKEN'; refreshToken?: string },
     accept: 'TOKEN_PROVIDED' | 'TOKEN_REFRESHED'
   ): Promise<string | null> {
     try {
-      const clients: readonly Client[] = await (self as unknown as ServiceWorkerGlobalScope).clients.matchAll({ type: 'window' });
+      const clients: readonly Client[] = await self.clients.matchAll({ type: 'window' });
       if (clients.length === 0) {
         debugLog('[TokenManager] No clients available');
         return null;

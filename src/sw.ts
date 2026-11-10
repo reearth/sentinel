@@ -14,9 +14,6 @@ import type { ServiceWorkerMessage, Token } from './types';
 
 declare const self: ServiceWorkerGlobalScope;
 
-// Before any listener: the browser re-evaluates this script whenever it
-// restarts an idle worker, and the first event after that must already see
-// the config. The registration's script URL is the only copy that survives.
 const urlConfig = decodeRuntimeConfig(self.location.search);
 if (!urlConfig && new URLSearchParams(self.location.search).has(CONFIG_PARAM)) {
   console.warn(
@@ -89,10 +86,6 @@ async function handleMessage(event: ExtendableMessageEvent): Promise<void> {
 
   switch (message.type) {
     case 'CONFIG': {
-      // Only pages on an older library send this. They registered a bare
-      // script URL, which the browser's update check can fill with this
-      // worker, so it is the only config such a worker can get. A config in
-      // the script URL always wins.
       if (urlConfig) {
         debugWarn('[ServiceWorker] Ignoring CONFIG message: config travels in the script URL');
         break;

@@ -33,8 +33,7 @@ async function stopServiceWorker(page: Page): Promise<CDPSession> {
 }
 
 let moves = 0;
-// Fly somewhere new each call so Cesium must request tiles it has never loaded.
-async function moveCamera(page: Page) {
+async function flyToUnvisitedView(page: Page) {
   const n = ++moves;
   await page.evaluate(
     (i) => window.__setView!(10 + i * 7.3, 20 + ((i * 11) % 40), 800_000 + i * 90_000),
@@ -45,7 +44,7 @@ async function moveCamera(page: Page) {
 async function exerciseTiles(page: Page) {
   await resetStats(page);
   for (let i = 0; i < 3; i++) {
-    await moveCamera(page);
+    await flyToUnvisitedView(page);
     await page.waitForTimeout(1500);
   }
   await expect.poll(async () => (await getStats(page)).ok, { timeout: 60_000 }).toBeGreaterThan(0);

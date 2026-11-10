@@ -35,7 +35,6 @@ function fakeClients(respond: 'token' | 'silent') {
 
 type Answer = 'token' | 'silent' | 'unavailable';
 
-/** A window client that answers the worker's token messages the way `answer` says. */
 function windowClient(answer: Answer, accessToken = 'tok-123') {
   return {
     type: 'window',
