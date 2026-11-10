@@ -122,7 +122,7 @@ export async function registerAssetSecurity(
       { scope: resolved.scope }
     );
 
-    await waitForServiceWorkerActive(swRegistration);
+    await waitForNewestWorkerActive(swRegistration);
     await waitForServiceWorkerControl(swRegistration, resolved.serviceWorkerControlTimeout);
 
     emitEvent({
@@ -195,23 +195,20 @@ export function getConfig(): AssetSecurityConfig | null {
 
 // Internal helpers
 
-async function waitForServiceWorkerActive(
+/**
+ * Waits for the newest worker, not just any active one: when the script URL
+ * changed, register() resolves while the new worker is still installing and
+ * the old, differently configured one is still active.
+ */
+async function waitForNewestWorkerActive(
   registration: ServiceWorkerRegistration
 ): Promise<void> {
-  return new Promise((resolve) => {
-    if (registration.active) {
-      resolve();
-      return;
-    }
+  const worker = registration.installing ?? registration.waiting ?? registration.active;
+  if (!worker || worker.state === 'activated') return;
 
-    const worker = registration.installing || registration.waiting;
-    if (!worker) {
-      resolve();
-      return;
-    }
-
+  await new Promise<void>((resolve) => {
     worker.addEventListener('statechange', function onStateChange() {
-      if (worker.state === 'activated') {
+      if (worker.state === 'activated' || worker.state === 'redundant') {
         worker.removeEventListener('statechange', onStateChange);
         resolve();
       }

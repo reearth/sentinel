@@ -104,4 +104,39 @@ describe('registerAssetSecurity', () => {
       expect.objectContaining({ type: 'TOKEN_PROVIDED', token: expect.objectContaining({ access_token: rt.validToken }) }),
     ]);
   });
+
+  it('waits for the installing worker, not the old active one', async () => {
+    const listeners = new Set<() => void>();
+    const installing = {
+      state: 'installing',
+      postMessage: vi.fn(),
+      addEventListener: (_type: string, listener: () => void) => listeners.add(listener),
+      removeEventListener: (_type: string, listener: () => void) => listeners.delete(listener),
+    };
+    const old = { state: 'activated', postMessage: vi.fn() };
+    const registration = { installing, waiting: null, active: old };
+    vi.stubGlobal('navigator', {
+      serviceWorker: {
+        controller: old,
+        register: vi.fn(async () => registration),
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+      },
+    });
+    const page = await loadPage();
+
+    let settled = false;
+    const done = page.registerAssetSecurity(config).then((result) => {
+      settled = true;
+      return result;
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(settled).toBe(false);
+
+    installing.state = 'activated';
+    Object.assign(registration, { installing: null, active: installing });
+    listeners.forEach((listener) => listener());
+
+    expect((await done).success).toBe(true);
+  });
 });

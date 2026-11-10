@@ -24,6 +24,7 @@ function createServiceWorkerEnvironment(controlled = false) {
   });
 
   const activeWorker = {
+    state: 'activated',
     postMessage,
   } as unknown as ServiceWorker;
 
