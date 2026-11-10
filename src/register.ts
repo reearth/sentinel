@@ -126,7 +126,7 @@ export async function registerAssetSecurity(
     // config, or a legacy bare serviceWorkerPath, installs a new one.
     swRegistration = await navigator.serviceWorker.register(scriptUrl, { scope: resolved.scope });
 
-    await waitForNewestWorkerActive(swRegistration);
+    await waitForNewestWorkerActive(swRegistration, scriptUrl, resolved.serviceWorkerControlTimeout);
     await waitForServiceWorkerControl(swRegistration, resolved.serviceWorkerControlTimeout);
 
     emitEvent({
@@ -202,22 +202,39 @@ export function getConfig(): AssetSecurityConfig | null {
 /**
  * Waits for the newest worker, not just any active one: when the script URL
  * changed, register() resolves while the new worker is still installing and
- * the old, differently configured one is still active.
+ * the old, differently configured one is still active. If the new worker
+ * fails to install or does not activate in time, registration fails unless
+ * a worker with this URL is active anyway (another tab registered it first).
  */
 async function waitForNewestWorkerActive(
-  registration: ServiceWorkerRegistration
+  registration: ServiceWorkerRegistration,
+  scriptUrl: string,
+  timeoutMs: number
 ): Promise<void> {
   const worker = registration.installing ?? registration.waiting ?? registration.active;
   if (!worker || worker.state === 'activated') return;
 
-  await new Promise<void>((resolve) => {
-    worker.addEventListener('statechange', function onStateChange() {
-      if (worker.state === 'activated' || worker.state === 'redundant') {
-        worker.removeEventListener('statechange', onStateChange);
-        resolve();
-      }
-    });
+  const activated = await new Promise<boolean>((resolve) => {
+    const finish = (result: boolean) => {
+      clearTimeout(timer);
+      worker.removeEventListener('statechange', onStateChange);
+      resolve(result);
+    };
+    const onStateChange = () => {
+      if (worker.state === 'activated') finish(true);
+      else if (worker.state === 'redundant') finish(false);
+    };
+    const timer = setTimeout(() => finish(false), timeoutMs);
+    worker.addEventListener('statechange', onStateChange);
   });
+  if (activated) return;
+
+  const expected = new URL(scriptUrl, globalThis.location?.href ?? registration.scope).href;
+  if (registration.active?.scriptURL !== expected) {
+    throw new Error(
+      `The service worker for this configuration failed to install or did not activate within ${timeoutMs} ms`
+    );
+  }
 }
 
 async function waitForServiceWorkerControl(

@@ -183,4 +183,73 @@ describe('registerAssetSecurity', () => {
 
     expect((await done).success).toBe(true);
   });
+
+  describe('when the new worker does not become active', () => {
+    function stubUpdate(finalState: 'redundant' | 'installing', activeScriptURL: (registered: string) => string) {
+      const listeners = new Set<() => void>();
+      const installing = {
+        state: 'installing',
+        postMessage: vi.fn(),
+        addEventListener: (_type: string, listener: () => void) => listeners.add(listener),
+        removeEventListener: (_type: string, listener: () => void) => listeners.delete(listener),
+      };
+      const registration = {
+        scope: 'https://app.example.com/',
+        installing,
+        waiting: null,
+        active: { state: 'activated', scriptURL: 'https://app.example.com/sw.js', postMessage: vi.fn() } as {
+          state: string;
+          scriptURL: string;
+          postMessage: () => void;
+        },
+      };
+      vi.stubGlobal('navigator', {
+        serviceWorker: {
+          controller: registration.active,
+          register: vi.fn(async (url: string) => {
+            if (finalState === 'redundant') {
+              setTimeout(() => {
+                installing.state = 'redundant';
+                registration.installing = null as never;
+                registration.active.scriptURL = activeScriptURL(new URL(url, registration.scope).href);
+                listeners.forEach((listener) => listener());
+              }, 0);
+            }
+            return registration;
+          }),
+          addEventListener: vi.fn(),
+          removeEventListener: vi.fn(),
+        },
+      });
+    }
+
+    it('fails when it turns redundant and the old worker keeps running', async () => {
+      stubUpdate('redundant', () => 'https://app.example.com/sw.js');
+      const onRegistrationError = vi.fn();
+      const page = await loadPage();
+
+      const result = await page.registerAssetSecurity({ ...config, onRegistrationError });
+
+      expect(result.success).toBe(false);
+      expect(onRegistrationError).toHaveBeenCalledWith(expect.any(Error));
+    });
+
+    it('succeeds when it turns redundant because a worker with the same URL won', async () => {
+      stubUpdate('redundant', (registered) => registered);
+      const page = await loadPage();
+
+      expect((await page.registerAssetSecurity(config)).success).toBe(true);
+    });
+
+    it('fails after serviceWorkerControlTimeout instead of waiting forever', async () => {
+      stubUpdate('installing', () => 'https://app.example.com/sw.js');
+      const onRegistrationError = vi.fn();
+      const page = await loadPage();
+
+      const result = await page.registerAssetSecurity({ ...config, serviceWorkerControlTimeout: 50, onRegistrationError });
+
+      expect(result.success).toBe(false);
+      expect(onRegistrationError).toHaveBeenCalledWith(expect.any(Error));
+    }, 2000);
+  });
 });
