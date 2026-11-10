@@ -6,12 +6,21 @@ import type {
   SecurityEvent,
 } from './public-types.js';
 import { serviceWorkerScriptUrl, toRuntimeConfig } from './runtime-config.js';
+import {
+  createTokenResponder,
+  forgetToken,
+  latestToken,
+  type TokenReply,
+  type TokenRequest,
+} from './token-provider.js';
 
 // Global state
 let swRegistration: ServiceWorkerRegistration | null = null;
 let config: AssetSecurityConfig | null = null;
 let eventListeners: Set<(event: SecurityEvent) => void> = new Set();
+let answerTokenRequest: ((request: TokenRequest) => Promise<TokenReply>) | null = null;
 const DEFAULT_SERVICE_WORKER_CONTROL_TIMEOUT = 5000;
+const DEFAULT_REFRESH_THRESHOLD = 60_000;
 
 // Debug logging for the page side. The service worker has its own helpers in
 // config.ts; this code runs in the page and reads the page-side config, so it
@@ -97,6 +106,12 @@ export async function registerAssetSecurity(
 
     debugLog('[AssetSecurity] Registering with config:', config);
 
+    answerTokenRequest = createTokenResponder({
+      latest: latestToken,
+      onTokenExpired: resolved.onTokenExpired,
+      refreshThreshold: resolved.tokenConfig?.refreshThreshold ?? DEFAULT_REFRESH_THRESHOLD,
+      now: () => Date.now(),
+    });
     ensureMessageListener();
 
     const existing = !!navigator.serviceWorker.controller;
@@ -152,6 +167,8 @@ export async function unregisterAssetSecurity(): Promise<boolean> {
       debugLog('[AssetSecurity] Service worker unregistered');
       swRegistration = null;
       config = null;
+      answerTokenRequest = null;
+      forgetToken();
       eventListeners.clear();
     }
 
@@ -276,6 +293,17 @@ function ensureMessageListener(): void {
     debugLog('[AssetSecurity] Message from SW:', type, payload);
 
     switch (type) {
+      case 'REQUEST_TOKEN':
+      case 'REFRESH_TOKEN': {
+        const port = event.ports[0];
+        if (!port) break;
+        const unavailable: TokenReply = { type: 'TOKEN_UNAVAILABLE' };
+        (answerTokenRequest?.(event.data) ?? Promise.resolve(unavailable)).then((reply) =>
+          port.postMessage(reply)
+        );
+        break;
+      }
+
       case 'TOKEN_EXPIRED':
         if (config?.onTokenExpired) {
           config.onTokenExpired();

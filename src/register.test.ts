@@ -71,4 +71,37 @@ describe('registerAssetSecurity', () => {
     expect(rt.toWorker.some((m) => (m as { type?: string }).type === 'CONFIG')).toBe(false);
     expect(warn).toHaveBeenCalledWith(expect.stringContaining('extractAssetId is deprecated'));
   });
+
+  it('registering twice with the same config keeps one worker and one token listener', async () => {
+    const page = await loadPage();
+    const onTokenExpired = vi.fn(async () => {
+      await page.updateToken({ accessToken: rt.validToken, expiresAt: Date.now() + DAY });
+    });
+    await page.registerAssetSecurity({ ...config, onTokenExpired });
+    const firstUrl = rt.registeredScriptURL;
+    await page.registerAssetSecurity({ ...config, onTokenExpired });
+
+    expect(rt.registeredScriptURL).toBe(firstUrl);
+
+    const replies = await rt.askPage({ type: 'REQUEST_TOKEN' });
+    expect(replies).toHaveLength(1);
+    expect(replies[0]).toMatchObject({ type: 'TOKEN_PROVIDED', token: { access_token: rt.validToken } });
+    expect(onTokenExpired).toHaveBeenCalledTimes(1);
+  });
+
+  it('answers token requests when the page reuses an existing registration', async () => {
+    const first = await loadPage();
+    await first.registerAssetSecurity(config);
+    const scriptUrl = rt.registeredScriptURL;
+
+    rt.reloadPage();
+    const page = await loadPage();
+    await page.registerAssetSecurity(config);
+    await page.updateToken({ accessToken: rt.validToken, expiresAt: Date.now() + DAY });
+
+    expect(rt.registeredScriptURL).toBe(scriptUrl);
+    expect(await rt.askPage({ type: 'REQUEST_TOKEN' })).toEqual([
+      expect.objectContaining({ type: 'TOKEN_PROVIDED', token: expect.objectContaining({ access_token: rt.validToken }) }),
+    ]);
+  });
 });

@@ -11,6 +11,8 @@ import {
   debugWarn,
   debugError,
 } from './register.js';
+import { forgetToken, rememberToken } from './token-provider.js';
+import type { Token } from './types.js';
 
 /**
  * Update the authentication token in the service worker
@@ -40,23 +42,19 @@ export async function updateToken(
   }
 
   try {
-    const expiresAt = options.expiresAt || Date.now() + 3600000; // Default 1 hour
+    const token: Token = {
+      access_token: options.accessToken,
+      expires_at: options.expiresAt || Date.now() + 3600000, // Default 1 hour
+      refresh_token: options.refreshToken,
+      scope: options.scope,
+    };
+    // Before the post: a REQUEST_TOKEN racing the ack must already see it.
+    rememberToken(token);
 
-    // Send token to service worker
     const messageChannel = new MessageChannel();
 
     registration.active.postMessage(
-      {
-        type: 'UPDATE_TOKEN',
-        payload: {
-          token: {
-            access_token: options.accessToken,
-            expires_at: expiresAt,
-            refresh_token: options.refreshToken,
-            scope: options.scope,
-          },
-        },
-      },
+      { type: 'UPDATE_TOKEN', payload: { token } },
       [messageChannel.port2]
     );
 
@@ -93,6 +91,7 @@ export async function updateToken(
  * ```
  */
 export async function clearToken(): Promise<boolean> {
+  forgetToken();
   const registration = getRegistration();
 
   if (!registration?.active) {
