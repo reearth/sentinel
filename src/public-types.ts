@@ -54,8 +54,8 @@ export interface AssetSecurityConfig {
    */
   tokenConfig?: {
     /**
-     * Memory cache TTL in milliseconds
-     * @default 300000 (5 minutes)
+     * Ignored. The service worker keeps a token in memory until it expires.
+     * @deprecated Kept so existing configs still type-check.
      */
     memoryCacheTTL?: number;
 

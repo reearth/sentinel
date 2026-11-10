@@ -29,9 +29,9 @@ describe('runtime config in the service worker script URL', () => {
     expect(decoded).toEqual(runtime);
     expect(decoded).toMatchObject({
       namespace: 'reearth-visualizer',
-      protectedDomains: ['tiles.example.com', 'localhost:8080'],
+      protectedDomains: ['localhost:8080', 'tiles.example.com'],
       proxyEndpoint: 'https://tiles.example.com',
-      token: { memoryCacheTTL: 300_000, refreshThreshold: 45_000 },
+      token: { refreshThreshold: 45_000 },
       cacheStrategies: { tiles: 'cache-first' },
       debug: true,
     });
@@ -67,6 +67,19 @@ describe('runtime config in the service worker script URL', () => {
     expect(encodeRuntimeConfig(toRuntimeConfig(reordered))).toBe(
       encodeRuntimeConfig(toRuntimeConfig(visualizer))
     );
+  });
+
+  it('encodes equal domain sets to the same string regardless of order or repeats', () => {
+    expect(
+      encodeRuntimeConfig(toRuntimeConfig({ ...visualizer, protectedDomains: ['tiles.example.com', 'localhost:8080', 'tiles.example.com'] }))
+    ).toBe(encodeRuntimeConfig(toRuntimeConfig({ ...visualizer, protectedDomains: ['localhost:8080', 'tiles.example.com'] })));
+  });
+
+  it('memoryCacheTTL does not reach the worker, so changing it does not reinstall', () => {
+    const withTtl = (memoryCacheTTL: number) =>
+      encodeRuntimeConfig(toRuntimeConfig({ ...visualizer, tokenConfig: { memoryCacheTTL, refreshThreshold: 45_000 } }));
+
+    expect(withTtl(1)).toBe(withTtl(300_000));
   });
 
   it.each([

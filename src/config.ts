@@ -21,7 +21,6 @@ const DEFAULT_CONFIG: ServiceWorkerConfig = {
 
   // Token management configuration
   token: {
-    memoryCacheTTL: 5 * 60 * 1000, // 5 minutes
     indexedDBStore: 'tokens',
     refreshThreshold: 60 * 1000, // Refresh if less than 1 minute remaining
   },

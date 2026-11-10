@@ -12,7 +12,7 @@ export interface RuntimeConfig {
   readonly protectedDomains: readonly string[];
   readonly assetPatterns: Partial<Readonly<Record<AssetPatternKey, RegExp>>>;
   readonly proxyEndpoint: string;
-  readonly token: { readonly memoryCacheTTL?: number; readonly refreshThreshold?: number };
+  readonly token: { readonly refreshThreshold?: number };
   readonly cacheStrategies: Partial<Readonly<Record<CacheAssetKind, CacheStrategy>>>;
   readonly debug: boolean;
 }
@@ -33,7 +33,7 @@ interface WireV1 {
   d: string[];
   p: Partial<Record<AssetPatternKey, [source: string, flags: string]>>;
   x: string;
-  t?: { ttl?: number; rt?: number };
+  t?: { rt?: number };
   c?: Partial<Record<CacheAssetKind, CacheStrategy>>;
   dbg?: 1;
 }
@@ -47,10 +47,7 @@ export function toRuntimeConfig(
     if (pattern) assetPatterns[key] = pattern;
   }
 
-  const token: { memoryCacheTTL?: number; refreshThreshold?: number } = {};
-  if (typeof config.tokenConfig?.memoryCacheTTL === 'number') {
-    token.memoryCacheTTL = config.tokenConfig.memoryCacheTTL;
-  }
+  const token: { refreshThreshold?: number } = {};
   if (typeof config.tokenConfig?.refreshThreshold === 'number') {
     token.refreshThreshold = config.tokenConfig.refreshThreshold;
   }
@@ -63,7 +60,7 @@ export function toRuntimeConfig(
 
   return {
     namespace: config.namespace as Namespace,
-    protectedDomains: [...config.protectedDomains],
+    protectedDomains: canonicalDomains(config.protectedDomains),
     assetPatterns,
     proxyEndpoint: config.proxyUrl,
     token,
@@ -74,17 +71,12 @@ export function toRuntimeConfig(
 
 /** Equal configs encode to the same string, so re-registering does not reinstall the worker. */
 export function encodeRuntimeConfig(config: RuntimeConfig): string {
-  const wire: WireV1 = { v: 1, ns: config.namespace, d: [...config.protectedDomains], p: {}, x: config.proxyEndpoint };
+  const wire: WireV1 = { v: 1, ns: config.namespace, d: canonicalDomains(config.protectedDomains), p: {}, x: config.proxyEndpoint };
   for (const key of PATTERN_KEYS) {
     const pattern = config.assetPatterns[key];
     if (pattern) wire.p[key] = [pattern.source, pattern.flags];
   }
-  const { memoryCacheTTL, refreshThreshold } = config.token;
-  if (memoryCacheTTL !== undefined || refreshThreshold !== undefined) {
-    wire.t = {};
-    if (memoryCacheTTL !== undefined) wire.t.ttl = memoryCacheTTL;
-    if (refreshThreshold !== undefined) wire.t.rt = refreshThreshold;
-  }
+  if (config.token.refreshThreshold !== undefined) wire.t = { rt: config.token.refreshThreshold };
   const cache: Partial<Record<CacheAssetKind, CacheStrategy>> = {};
   for (const kind of CACHE_KINDS) {
     const strategy = config.cacheStrategies[kind];
@@ -133,13 +125,9 @@ function parseWire(wire: unknown): RuntimeConfig | null {
     assetPatterns[key] = new RegExp(entry[0], entry[1]);
   }
 
-  const token: { memoryCacheTTL?: number; refreshThreshold?: number } = {};
+  const token: { refreshThreshold?: number } = {};
   if (t !== undefined) {
     if (!isRecord(t)) return null;
-    if (t.ttl !== undefined) {
-      if (typeof t.ttl !== 'number') return null;
-      token.memoryCacheTTL = t.ttl;
-    }
     if (t.rt !== undefined) {
       if (typeof t.rt !== 'number') return null;
       token.refreshThreshold = t.rt;
@@ -166,6 +154,11 @@ function parseWire(wire: unknown): RuntimeConfig | null {
     cacheStrategies,
     debug: dbg === 1,
   };
+}
+
+/** Sorted and deduplicated: the same set of domains always gives the same script URL. */
+function canonicalDomains(domains: readonly string[]): string[] {
+  return [...new Set(domains)].sort();
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

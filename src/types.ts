@@ -40,7 +40,6 @@ export interface ServiceWorkerConfig {
     generalAssets: RegExp;
   };
   token: {
-    memoryCacheTTL: number;
     indexedDBStore: string;
     refreshThreshold: number;
   };
