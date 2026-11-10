@@ -76,7 +76,12 @@ self.addEventListener('fetch', (event) => {
 /**
  * Handle messages from the main thread
  */
-self.addEventListener('message', async (event) => {
+self.addEventListener('message', (event) => {
+  // Without waitUntil the browser may terminate the worker mid IndexedDB write.
+  event.waitUntil(handleMessage(event));
+});
+
+async function handleMessage(event: ExtendableMessageEvent): Promise<void> {
   const message = event.data as ServiceWorkerMessage;
 
   debugLog('[ServiceWorker] Received message:', message.type);
@@ -117,7 +122,7 @@ self.addEventListener('message', async (event) => {
     default:
       debugWarn('[ServiceWorker] Unknown message type:', message.type);
   }
-});
+}
 
 /**
  * Clear all caches
