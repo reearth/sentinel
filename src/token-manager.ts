@@ -20,7 +20,6 @@ export const TOKEN_ACQUISITION_BACKOFF_MS = 15_000;
 
 export class TokenManager implements ITokenManager {
   private memoryCache: TokenStorageEntry | null = null;
-  private db: IDBPDatabase<AuthDB> | null = null;
   private dbPromise: Promise<IDBPDatabase<AuthDB>> | null = null;
 
   /** Shared in-flight fresh-token request — the SW is a single context,
@@ -29,26 +28,16 @@ export class TokenManager implements ITokenManager {
   private inFlightAcquisition: Promise<string | null> | null = null;
   private lastAcquisitionFailureAt = 0;
 
-  constructor() {
-    // Don't initialize DB in constructor - let it be lazy loaded
-    // This ensures config/namespace is set first
-  }
-
-  /**
-   * Initialize IndexedDB connection
-   */
-  private async initDB(): Promise<void> {
-    if (this.dbPromise) return;
-
-    this.dbPromise = openDB<AuthDB>(getIndexedDBName(), 1, {
+  /** Every caller awaits the same open, so concurrent first requests all see the connection. */
+  private db(): Promise<IDBPDatabase<AuthDB>> {
+    this.dbPromise ??= openDB<AuthDB>(getIndexedDBName(), 1, {
       upgrade(db) {
         if (!db.objectStoreNames.contains('tokens')) {
           db.createObjectStore('tokens');
         }
       },
     });
-
-    this.db = await this.dbPromise;
+    return this.dbPromise;
   }
 
   /**
@@ -65,8 +54,7 @@ export class TokenManager implements ITokenManager {
 
     // 2. Check IndexedDB
     try {
-      await this.initDB();
-      const dbToken = await this.db!.get('tokens', 'current');
+      const dbToken = await (await this.db()).get('tokens', 'current');
 
       if (dbToken && !this.isTokenExpired(dbToken)) {
         debugLog('[TokenManager] Token found in IndexedDB');
@@ -104,8 +92,7 @@ export class TokenManager implements ITokenManager {
 
     // Store in IndexedDB
     try {
-      await this.initDB();
-      await this.db!.put('tokens', entry, 'current');
+      await (await this.db()).put('tokens', entry, 'current');
       debugLog('[TokenManager] Token stored successfully');
     } catch (error) {
       debugError('[TokenManager] Error storing token:', error);
@@ -120,7 +107,7 @@ export class TokenManager implements ITokenManager {
 
     try {
       // Get current token with refresh token
-      const current = this.memoryCache || await this.db?.get('tokens', 'current');
+      const current = this.memoryCache || await (await this.db()).get('tokens', 'current');
 
       if (!current?.refreshToken) {
         debugLog('[TokenManager] No refresh token available');
@@ -170,8 +157,7 @@ export class TokenManager implements ITokenManager {
     this.memoryCache = null;
 
     try {
-      await this.initDB();
-      await this.db!.delete('tokens', 'current');
+      await (await this.db()).delete('tokens', 'current');
       debugLog('[TokenManager] Tokens cleared');
     } catch (error) {
       debugError('[TokenManager] Error clearing tokens:', error);

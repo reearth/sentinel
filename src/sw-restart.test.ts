@@ -99,4 +99,19 @@ describe('protected tile requests stay authenticated', () => {
     await rt.fetch('https://a.tile.openstreetmap.org/imagery/1/1/1.png');
     expect(rt.lastUpstreamAuth()).toBeNull();
   });
+
+  it('a burst of tile requests after a restart opens the token store once and never asks the page', async () => {
+    const page = await loadPage();
+    await page.registerAssetSecurity(visualizerConfig());
+    await page.updateToken({ accessToken: rt.validToken, expiresAt: Date.now() + DAY });
+
+    await rt.restart();
+    const opensBefore = rt.idbOpens;
+    const tiles = Array.from({ length: 50 }, (_, i) => TILE.replace('12903', String(i)));
+    const responses = await Promise.all(tiles.map((tile) => rt.fetch(tile)));
+
+    expect(responses.map((r) => r.status)).toEqual(tiles.map(() => 200));
+    expect(rt.idbOpens - opensBefore).toBe(1);
+    expect(rt.toPage.filter((m) => (m as { type?: string }).type === 'REQUEST_TOKEN')).toEqual([]);
+  });
 });
