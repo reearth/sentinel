@@ -16,8 +16,11 @@ export interface TokenSource {
   reportError?(error: unknown): void;
 }
 
-/** Shorter than the worker's 5s wait, so the worker hears "no" before it gives up on its own. */
-export const TOKEN_REPLY_DEADLINE_MS = 3000;
+/** How long the worker waits for the pages to answer a token request. */
+export const WORKER_TOKEN_WAIT_MS = 5000;
+
+/** Shorter than the worker's wait, so the worker hears "no" before it gives up on its own. */
+export const TOKEN_REPLY_DEADLINE_MS = WORKER_TOKEN_WAIT_MS - 2000;
 
 let current: Token | null = null;
 

@@ -65,6 +65,24 @@ describe('protected tile requests stay authenticated', () => {
     expect(Date.now() - started).toBeLessThan(1000);
   }, 15_000);
 
+  it('a tab that never answers token requests does not stall the one that does', async () => {
+    rt.addClient('silent', 'front');
+    const page = await loadPage();
+    const onTokenExpired = vi.fn(async () => {
+      await page.updateToken({ accessToken: rt.validToken, expiresAt: Date.now() + DAY });
+    });
+    await page.registerAssetSecurity(visualizerConfig(onTokenExpired));
+    await page.updateToken({ accessToken: 'tok-stale', expiresAt: Date.now() - 1 });
+    await rt.restart();
+
+    const started = Date.now();
+    const resp = await rt.fetch(TILE);
+
+    expect(resp.status).toBe(200);
+    expect(rt.lastUpstreamAuth()).toBe(`Bearer ${rt.validToken}`);
+    expect(Date.now() - started).toBeLessThan(1000);
+  }, 15_000);
+
   it('after a page reload reuses the existing registration, then the worker restarts', async () => {
     const first = await loadPage();
     await first.registerAssetSecurity(visualizerConfig());

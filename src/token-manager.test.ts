@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as fakeIndexedDB from 'fake-indexeddb';
 import { openDB } from 'idb';
 import { TokenManager, TOKEN_ACQUISITION_BACKOFF_MS } from './token-manager.js';
+import { WORKER_TOKEN_WAIT_MS } from './token-provider.js';
 
 /**
  * Fake SW clients list. `respond` controls whether the page answers the
@@ -25,6 +26,73 @@ function fakeClients(respond: 'token' | 'silent') {
     clients: { matchAll: async () => [{ postMessage }] },
   };
 }
+
+type Answer = 'token' | 'silent' | 'unavailable';
+
+/** A window client that answers the worker's token messages the way `answer` says. */
+function windowClient(answer: Answer, accessToken = 'tok-123') {
+  return {
+    type: 'window',
+    postMessage: vi.fn((message: { type?: string }, ports?: MessagePort[]) => {
+      const reply = message.type === 'REFRESH_TOKEN' ? 'TOKEN_REFRESHED' : 'TOKEN_PROVIDED';
+      if (answer === 'token') {
+        ports?.[0]?.postMessage({ type: reply, token: { access_token: accessToken, expires_at: Date.now() + 3600_000 } });
+      } else if (answer === 'unavailable') {
+        ports?.[0]?.postMessage({ type: 'TOKEN_UNAVAILABLE' });
+      }
+    }),
+  };
+}
+
+describe('TokenManager asks every window client', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.useRealTimers();
+  });
+
+  it.each<[string, Answer]>([
+    ['never answers', 'silent'],
+    ['answers TOKEN_UNAVAILABLE', 'unavailable'],
+  ])('takes the token from the second tab when the first %s', async (_label, first) => {
+    vi.useFakeTimers();
+    const clients = [windowClient(first), windowClient('token')];
+    const matchAll = vi.fn(async () => clients);
+    vi.stubGlobal('self', { clients: { matchAll } });
+
+    expect(await new TokenManager().getToken()).toBe('tok-123');
+    expect(matchAll).toHaveBeenCalledWith({ type: 'window' });
+  });
+
+  it('gives up at the overall deadline when no tab answers', async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal('self', { clients: { matchAll: async () => [windowClient('silent'), windowClient('silent')] } });
+
+    let token: string | null | undefined;
+    new TokenManager().getToken().then((t) => (token = t));
+    await vi.advanceTimersByTimeAsync(WORKER_TOKEN_WAIT_MS - 1);
+    expect(token).toBeUndefined();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(token).toBeNull();
+  });
+
+  it('TOKEN_UNAVAILABLE from every tab ends the wait at once', async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal('self', { clients: { matchAll: async () => [windowClient('unavailable'), windowClient('unavailable')] } });
+
+    expect(await new TokenManager().getToken()).toBeNull();
+  });
+
+  it('concurrent refreshes share one REFRESH_TOKEN round trip', async () => {
+    const client = windowClient('token', 'tok-new');
+    vi.stubGlobal('self', { clients: { matchAll: async () => [client] } });
+
+    const tm = new TokenManager();
+    const tokens = await Promise.all([tm.refreshToken(), tm.refreshToken(), tm.refreshToken()]);
+
+    expect(tokens).toEqual(['tok-new', 'tok-new', 'tok-new']);
+    expect(client.postMessage).toHaveBeenCalledTimes(1);
+  });
+});
 
 describe('TokenManager fresh-token acquisition', () => {
   beforeEach(() => {
@@ -98,6 +166,26 @@ describe('TokenManager fresh-token acquisition', () => {
     const tm = new TokenManager();
     expect(await tm.getToken()).toBeNull();
     expect(await tm.getToken()).toBe('tok-stored');
+  });
+
+  it('a token from the page ends the backoff window', async () => {
+    let answer: Answer = 'silent';
+    const postMessage = vi.fn((message: { type?: string }, ports?: MessagePort[]) =>
+      windowClient(answer).postMessage(message, ports)
+    );
+    vi.stubGlobal('self', { clients: { matchAll: async () => [{ postMessage }] } });
+
+    const tm = new TokenManager();
+    const first = tm.getToken();
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(await first).toBeNull();
+
+    vi.useRealTimers();
+    await tm.setToken({ access_token: 'tok-short', expires_at: Date.now() + 20 });
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    answer = 'token';
+
+    expect(await tm.getToken()).toBe('tok-123');
   });
 
   it('a provided token is served from memory afterwards — no further messages', async () => {
