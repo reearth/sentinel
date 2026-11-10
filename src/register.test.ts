@@ -105,6 +105,26 @@ describe('registerAssetSecurity', () => {
     ]);
   });
 
+  it('a changed config is in force once registerAssetSecurity resolves', async () => {
+    const first = await loadPage();
+    await first.registerAssetSecurity(config);
+    await first.updateToken({ accessToken: rt.validToken, expiresAt: Date.now() + DAY });
+    const urlA = rt.registeredScriptURL;
+
+    rt.reloadPage();
+    const page = await loadPage();
+    const result = await page.registerAssetSecurity({
+      ...config,
+      protectedDomains: ['tiles.example.com', 'tiles.other.example'],
+    });
+
+    expect(result.success).toBe(true);
+    expect(rt.registeredScriptURL).not.toBe(urlA);
+    expect(rt.controllerScriptURL).toBe(rt.registeredScriptURL);
+    expect((await rt.fetch('https://tiles.other.example/imagery/x/1/2/3.png')).status).toBe(200);
+    expect(rt.lastUpstreamAuth()).toBe(`Bearer ${rt.validToken}`);
+  });
+
   it('waits for the installing worker, not the old active one', async () => {
     const listeners = new Set<() => void>();
     const installing = {
