@@ -131,10 +131,9 @@ export function isProtectedDomain(url: URL | string): boolean {
 
   return CONFIG.protectedDomains.some(domain => {
     if (domain.includes(':')) {
-      // Handle domain with port
       return urlObj.host === domain;
     }
-    return urlObj.hostname === domain || urlObj.hostname.includes(domain);
+    return urlObj.hostname === domain || urlObj.hostname.endsWith(`.${domain}`);
   });
 }
 
