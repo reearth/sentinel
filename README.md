@@ -134,11 +134,12 @@ await registerAssetSecurity({
   protectedDomains: ['assets.example.com'],
 
   tokenConfig: {
-    memoryCacheTTL: 10 * 60 * 1000,    // 10 minutes in memory
     refreshThreshold: 2 * 60 * 1000     // Refresh if < 2 min remaining
   }
 });
 ```
+
+`tokenConfig.memoryCacheTTL` is ignored: the service worker keeps a token in memory until it expires. `refreshThreshold` must be a finite number; anything else fails registration.
 
 ### Namespace Isolation
 
@@ -151,6 +152,8 @@ await registerAssetSecurity({
   protectedDomains: ['assets.example.com']
 });
 ```
+
+When a new worker activates, it deletes only earlier cache versions of its own namespace (`my-app-v0` and so on). Other caches on the origin are left alone.
 
 ### Service Worker Control Timeout
 
@@ -174,11 +177,15 @@ The promise resolves once the service worker is registered, configured, and cont
 
 The configuration travels in the service worker's script URL (`/sw.js?sentinel=...`), so it survives the browser stopping an idle worker. Registering again with the same configuration keeps the running worker; a changed configuration installs a new one. Serve `sw.js` for that path regardless of its query string.
 
-When the service worker has no valid token, it asks the page. The page answers with the latest token passed to `updateToken()`, or calls `onTokenExpired` once and answers with the token that callback sets. If `onTokenExpired` throws or takes longer than 3 seconds, the request continues without a token.
+Registration fails, through `onRegistrationError` and `success: false`, when the configuration cannot be encoded for the worker, or when the new worker fails to install or does not activate within `serviceWorkerControlTimeout`. If a worker with the same configuration is already active, for example because another tab registered it first, registration succeeds.
+
+When the service worker has no valid token, it asks every open tab of the app and uses the first token it gets. A page answers with the latest token passed to `updateToken()`, or calls `onTokenExpired` once and answers with the token that callback sets. If `onTokenExpired` throws or takes longer than 3 seconds, the page answers that it has no token. If no tab answers within 5 seconds, the request continues without a token.
+
+When the server rejects a token with 401 or 403, the service worker asks the pages for a different one. The page then always calls `onTokenExpired`, even if its own token has not expired, and answers only with a token other than the one it had. The request is retried once with that token.
 
 **Parameters:**
 - `config.proxyUrl` (string, required): URL of your authentication proxy
-- `config.protectedDomains` (string[], required): Domains requiring auth
+- `config.protectedDomains` (string[], required): Domains requiring auth. An entry matches that host and its subdomains, so `example.com` covers `tiles.example.com` but not `example.com.attacker.net`. An entry with a port, such as `localhost:8080`, matches that host and port only
 - `config.assetPatterns` (object, optional): Custom URL patterns
 - `config.extractAssetId` (function, deprecated): Ignored. Functions cannot be sent to the service worker
 - `config.namespace` (string, optional): Storage namespace (default: 'asset-security')
@@ -366,9 +373,9 @@ document.getElementById('login-btn').addEventListener('click', async () => {
 
 ## Token Storage Hierarchy
 
-1. **Memory Cache** (fastest, 5 min TTL)
-   - In-memory storage
-   - Cleared on page refresh
+1. **Memory Cache** (fastest)
+   - In-memory storage in the service worker, kept until the token expires
+   - Cleared when the browser stops the idle worker
 
 2. **IndexedDB** (persistent)
    - Survives page refreshes
