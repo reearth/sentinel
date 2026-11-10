@@ -135,6 +135,20 @@ describe('registerAssetSecurity', () => {
     expect(rt.cacheNames.sort()).toEqual(['other-app-v0', 'reearth-visualizer-v1', 'reearth-visualizer-v1-backup', 'workbox-precache']);
   });
 
+  it.each([
+    ['a non-finite refreshThreshold', { tokenConfig: { refreshThreshold: NaN } }],
+    ['an empty namespace', { namespace: '' }],
+  ])('fails registration for %s instead of installing an unconfigured worker', async (_label, overrides) => {
+    const onRegistrationError = vi.fn();
+    const page = await loadPage();
+
+    const result = await page.registerAssetSecurity({ ...config, ...overrides, onRegistrationError });
+
+    expect(result.success).toBe(false);
+    expect(onRegistrationError).toHaveBeenCalledWith(expect.any(Error));
+    expect(rt.registeredScriptURL).toBeNull();
+  });
+
   it('waits for the installing worker, not the old active one', async () => {
     const listeners = new Set<() => void>();
     const installing = {

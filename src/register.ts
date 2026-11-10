@@ -5,7 +5,7 @@ import type {
   RegistrationResult,
   SecurityEvent,
 } from './public-types.js';
-import { serviceWorkerScriptUrl, toRuntimeConfig } from './runtime-config.js';
+import { decodeRuntimeConfig, serviceWorkerScriptUrl, toRuntimeConfig } from './runtime-config.js';
 import {
   createTokenResponder,
   forgetToken,
@@ -114,13 +114,16 @@ export async function registerAssetSecurity(
     });
     ensureMessageListener();
 
+    const scriptUrl = serviceWorkerScriptUrl(resolved.serviceWorkerPath, toRuntimeConfig(resolved));
+    // The worker would start unconfigured and intercept nothing.
+    if (!decodeRuntimeConfig(scriptUrl.slice(scriptUrl.indexOf('?')))) {
+      throw new Error('The service worker could not read back this configuration');
+    }
+
     const existing = !!navigator.serviceWorker.controller;
     // Same config, same URL: the browser keeps the running worker. A changed
     // config, or a legacy bare serviceWorkerPath, installs a new one.
-    swRegistration = await navigator.serviceWorker.register(
-      serviceWorkerScriptUrl(resolved.serviceWorkerPath, toRuntimeConfig(resolved)),
-      { scope: resolved.scope }
-    );
+    swRegistration = await navigator.serviceWorker.register(scriptUrl, { scope: resolved.scope });
 
     await waitForNewestWorkerActive(swRegistration);
     await waitForServiceWorkerControl(swRegistration, resolved.serviceWorkerControlTimeout);

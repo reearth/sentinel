@@ -92,10 +92,37 @@ describe('runtime config in the service worker script URL', () => {
     ['an invalid regex source', `?${CONFIG_PARAM}=${btoa(JSON.stringify({ v: 1, ns: 'a', d: [], p: { mvtTiles: ['(', ''] }, x: '' }))}`],
     ['an invalid regex flag', `?${CONFIG_PARAM}=${btoa(JSON.stringify({ v: 1, ns: 'a', d: [], p: { mvtTiles: ['a', 'zz'] }, x: '' }))}`],
     ['a non-string domain', `?${CONFIG_PARAM}=${btoa(JSON.stringify({ v: 1, ns: 'a', d: [1], p: {}, x: '' }))}`],
-    ['an unknown cache strategy', `?${CONFIG_PARAM}=${btoa(JSON.stringify({ v: 1, ns: 'a', d: [], p: {}, x: '', c: { tiles: 'yolo' } }))}`],
+    ['a missing namespace', `?${CONFIG_PARAM}=${btoa(JSON.stringify({ v: 1, d: [], p: {}, x: '' }))}`],
+    ['a missing proxy endpoint', `?${CONFIG_PARAM}=${btoa(JSON.stringify({ v: 1, ns: 'a', d: [], p: {} }))}`],
     ['a JSON array', `?${CONFIG_PARAM}=${btoa('[]')}`],
   ])('decodes %s to null without throwing', (_label, search) => {
     expect(decodeRuntimeConfig(search)).toBeNull();
+  });
+
+  it('drops an invalid optional field and keeps the rest of the config', () => {
+    const wire = {
+      v: 1,
+      ns: 'reearth-visualizer',
+      d: ['tiles.example.com'],
+      p: {},
+      x: 'https://tiles.example.com',
+      t: { rt: 'soon' },
+      c: { tiles: 'yolo', images: 'cache-first' },
+    };
+
+    expect(decodeRuntimeConfig(`?${CONFIG_PARAM}=${btoa(JSON.stringify(wire))}`)).toEqual({
+      namespace: 'reearth-visualizer',
+      protectedDomains: ['tiles.example.com'],
+      assetPatterns: {},
+      proxyEndpoint: 'https://tiles.example.com',
+      token: {},
+      cacheStrategies: { images: 'cache-first' },
+      debug: false,
+    });
+  });
+
+  it.each([NaN, Infinity, -Infinity])('rejects a refreshThreshold of %s', (refreshThreshold) => {
+    expect(() => toRuntimeConfig({ ...visualizer, tokenConfig: { refreshThreshold } })).toThrow(/refreshThreshold/);
   });
 
   it('keeps other query params on serviceWorkerPath', () => {

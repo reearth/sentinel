@@ -48,8 +48,12 @@ export function toRuntimeConfig(
   }
 
   const token: { refreshThreshold?: number } = {};
-  if (typeof config.tokenConfig?.refreshThreshold === 'number') {
-    token.refreshThreshold = config.tokenConfig.refreshThreshold;
+  const refreshThreshold = config.tokenConfig?.refreshThreshold;
+  if (refreshThreshold !== undefined) {
+    if (!Number.isFinite(refreshThreshold)) {
+      throw new Error(`tokenConfig.refreshThreshold must be a finite number, got ${refreshThreshold}`);
+    }
+    token.refreshThreshold = refreshThreshold;
   }
 
   const cacheStrategies: Partial<Record<CacheAssetKind, CacheStrategy>> = {};
@@ -125,23 +129,16 @@ function parseWire(wire: unknown): RuntimeConfig | null {
     assetPatterns[key] = new RegExp(entry[0], entry[1]);
   }
 
+  // Optional fields have safe defaults, so an invalid one is dropped rather
+  // than leaving the whole worker unconfigured.
   const token: { refreshThreshold?: number } = {};
-  if (t !== undefined) {
-    if (!isRecord(t)) return null;
-    if (t.rt !== undefined) {
-      if (typeof t.rt !== 'number') return null;
-      token.refreshThreshold = t.rt;
-    }
-  }
+  if (isRecord(t) && Number.isFinite(t.rt)) token.refreshThreshold = t.rt as number;
 
   const cacheStrategies: Partial<Record<CacheAssetKind, CacheStrategy>> = {};
-  if (c !== undefined) {
-    if (!isRecord(c)) return null;
+  if (isRecord(c)) {
     for (const kind of CACHE_KINDS) {
       const strategy = c[kind];
-      if (strategy === undefined) continue;
-      if (!CACHE_STRATEGIES.includes(strategy as CacheStrategy)) return null;
-      cacheStrategies[kind] = strategy as CacheStrategy;
+      if (CACHE_STRATEGIES.includes(strategy as CacheStrategy)) cacheStrategies[kind] = strategy as CacheStrategy;
     }
   }
 
