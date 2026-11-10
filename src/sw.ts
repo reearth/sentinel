@@ -7,6 +7,7 @@ import {
   debugLog,
   debugWarn,
   getCacheName,
+  isStaleCacheName,
 } from './config';
 import { decodeRuntimeConfig } from './runtime-config';
 import type { ServiceWorkerMessage, Token } from './types';
@@ -35,14 +36,8 @@ self.addEventListener('activate', (event) => {
 
   event.waitUntil(
     (async () => {
-      const currentCacheName = getCacheName();
-      // Clean up old caches (keep only current version)
       const cacheNames = await caches.keys();
-      await Promise.all(
-        cacheNames
-          .filter((name) => name !== currentCacheName)
-          .map((name) => caches.delete(name))
-      );
+      await Promise.all(cacheNames.filter(isStaleCacheName).map((name) => caches.delete(name)));
 
       // Claim all clients
       await self.clients.claim();

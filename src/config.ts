@@ -116,6 +116,12 @@ export function getCacheName(): string {
   return `${CONFIG.namespace}-v1`;
 }
 
+/** An earlier cache version of this namespace. Other caches on the origin belong to someone else. */
+export function isStaleCacheName(name: string): boolean {
+  const prefix = `${CONFIG.namespace}-v`;
+  return name !== getCacheName() && name.startsWith(prefix) && /^\d+$/.test(name.slice(prefix.length));
+}
+
 /**
  * Get current IndexedDB name (dynamically generated)
  */

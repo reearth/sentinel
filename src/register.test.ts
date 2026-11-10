@@ -125,6 +125,16 @@ describe('registerAssetSecurity', () => {
     expect(rt.lastUpstreamAuth()).toBe(`Bearer ${rt.validToken}`);
   });
 
+  it("activation deletes only this namespace's old cache versions", async () => {
+    for (const name of ['reearth-visualizer-v0', 'reearth-visualizer-v1', 'reearth-visualizer-v1-backup', 'other-app-v0', 'workbox-precache']) {
+      rt.seedCache(name);
+    }
+    const page = await loadPage();
+    await page.registerAssetSecurity(config);
+
+    expect(rt.cacheNames.sort()).toEqual(['other-app-v0', 'reearth-visualizer-v1', 'reearth-visualizer-v1-backup', 'workbox-precache']);
+  });
+
   it('waits for the installing worker, not the old active one', async () => {
     const listeners = new Set<() => void>();
     const installing = {
