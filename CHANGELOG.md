@@ -5,6 +5,37 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **Protected requests stay authenticated after the browser stops an idle
+  service worker.** The worker kept its configuration only in memory, so
+  after a restart it intercepted nothing and looked for the token under the
+  default namespace, and tiles went out without `Authorization`. The
+  configuration now travels in the service worker's script URL, which the
+  browser restores on every start. Existing `/sw.js` registrations move to
+  the new URL on the next `registerAssetSecurity()` call.
+- **`onTokenExpired` is called when the service worker needs a token.** The
+  page never answered the worker's token requests, so each miss stalled for
+  5 s and then went out unauthenticated. The page now answers from the
+  latest `updateToken()` token or by awaiting `onTokenExpired` (one call for
+  concurrent requests, at most 3 s).
+- Token requests from a page that reused an existing registration are
+  answered too; the message listener was only installed on a first-time
+  registration.
+- Concurrent requests after a worker restart no longer fail to read the
+  stored token while the token database is still opening.
+- `registerAssetSecurity()` waits for the newly installed worker instead of
+  resolving while the previous one is still active.
+- `tokenConfig` and `cacheStrategies` now reach the service worker; they
+  were silently dropped before.
+
+### Deprecated
+
+- `extractAssetId` is ignored. Passing a function made registration fail
+  with a `DataCloneError`.
+
 ## [0.1.3] — 2026-11-06
 
 ### Fixed

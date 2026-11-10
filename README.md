@@ -107,23 +107,6 @@ await registerAssetSecurity({
 });
 ```
 
-### Custom Asset ID Extraction
-
-If your URLs have a specific structure, provide a custom extractor:
-
-```typescript
-await registerAssetSecurity({
-  proxyUrl: 'https://proxy.example.com',
-  protectedDomains: ['cdn.example.com'],
-
-  // Extract asset ID from: /content/assets/{uuid}/file.jpg
-  extractAssetId: (url) => {
-    const match = url.pathname.match(/\/assets\/([^/]+)\//);
-    return match ? match[1] : null;
-  }
-});
-```
-
 ### Cache Strategies
 
 Configure caching behavior per asset type:
@@ -189,11 +172,15 @@ Initialize the service worker with your configuration.
 
 The promise resolves once the service worker is registered, configured, and controlling the current page when the browser allows it. Sentinel sends an internal `CLAIM_CLIENTS` message to handle hard reloads where `navigator.serviceWorker.controller` can be `null`; if control is not gained within `serviceWorkerControlTimeout`, registration continues and logs a warning in debug mode.
 
+The configuration travels in the service worker's script URL (`/sw.js?sentinel=...`), so it survives the browser stopping an idle worker. Registering again with the same configuration keeps the running worker; a changed configuration installs a new one. Serve `sw.js` for that path regardless of its query string.
+
+When the service worker has no valid token, it asks the page. The page answers with the latest token passed to `updateToken()`, or calls `onTokenExpired` once and answers with the token that callback sets. If `onTokenExpired` throws or takes longer than 3 seconds, the request continues without a token.
+
 **Parameters:**
 - `config.proxyUrl` (string, required): URL of your authentication proxy
 - `config.protectedDomains` (string[], required): Domains requiring auth
 - `config.assetPatterns` (object, optional): Custom URL patterns
-- `config.extractAssetId` (function, optional): Custom ID extractor
+- `config.extractAssetId` (function, deprecated): Ignored. Functions cannot be sent to the service worker
 - `config.namespace` (string, optional): Storage namespace (default: 'asset-security')
 - `config.tokenConfig` (object, optional): Token management settings
 - `config.cacheStrategies` (object, optional): Cache behavior per asset type
