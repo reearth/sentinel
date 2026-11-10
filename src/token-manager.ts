@@ -36,6 +36,10 @@ export class TokenManager implements ITokenManager {
           db.createObjectStore('tokens');
         }
       },
+    }).catch((error) => {
+      // A failed open must not poison every later lookup until the worker restarts.
+      this.dbPromise = null;
+      throw error;
     });
     return this.dbPromise;
   }

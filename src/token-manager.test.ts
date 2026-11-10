@@ -1,4 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import * as fakeIndexedDB from 'fake-indexeddb';
+import { openDB } from 'idb';
 import { TokenManager, TOKEN_ACQUISITION_BACKOFF_MS } from './token-manager.js';
 
 /**
@@ -68,6 +70,34 @@ describe('TokenManager fresh-token acquisition', () => {
     await vi.advanceTimersByTimeAsync(5_000);
     expect(await third).toBeNull();
     expect(fake.postMessage).toHaveBeenCalledTimes(2);
+  });
+
+  it('a failed token-store open is retried on the next lookup instead of failing forever', async () => {
+    vi.useRealTimers();
+    for (const name of ['IDBCursor', 'IDBCursorWithValue', 'IDBDatabase', 'IDBFactory', 'IDBIndex',
+      'IDBKeyRange', 'IDBObjectStore', 'IDBOpenDBRequest', 'IDBRequest', 'IDBTransaction',
+      'IDBVersionChangeEvent'] as const) {
+      vi.stubGlobal(name, fakeIndexedDB[name]);
+    }
+    const factory = new fakeIndexedDB.IDBFactory();
+    vi.stubGlobal('indexedDB', factory);
+    const seeded = await openDB('asset-security-auth', 1, {
+      upgrade: (db) => db.createObjectStore('tokens'),
+    });
+    await seeded.put('tokens', { token: 'tok-stored', expiry: Date.now() + 3600_000 }, 'current');
+    seeded.close();
+    (await openDB('asset-security-newer', 2)).close();
+
+    let opens = 0;
+    vi.stubGlobal('indexedDB', {
+      open: (name: string, version?: number) =>
+        opens++ === 0 ? factory.open('asset-security-newer', 1) : factory.open(name, version),
+    });
+    vi.stubGlobal('self', { clients: { matchAll: async () => [] } });
+
+    const tm = new TokenManager();
+    expect(await tm.getToken()).toBeNull();
+    expect(await tm.getToken()).toBe('tok-stored');
   });
 
   it('a provided token is served from memory afterwards — no further messages', async () => {
