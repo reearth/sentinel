@@ -198,3 +198,53 @@ describe('TokenManager fresh-token acquisition', () => {
     expect(fake.postMessage).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('TokenManager token store connection', () => {
+  const IDB_INTERFACES = ['IDBCursor', 'IDBCursorWithValue', 'IDBDatabase', 'IDBFactory', 'IDBIndex',
+    'IDBKeyRange', 'IDBObjectStore', 'IDBOpenDBRequest', 'IDBRequest', 'IDBTransaction',
+    'IDBVersionChangeEvent'] as const;
+  let connections: IDBDatabase[];
+
+  beforeEach(() => {
+    for (const name of IDB_INTERFACES) vi.stubGlobal(name, fakeIndexedDB[name]);
+    const factory = new fakeIndexedDB.IDBFactory();
+    const open = factory.open.bind(factory);
+    connections = [];
+    factory.open = (name: string, version?: number) => {
+      const request = open(name, version);
+      request.addEventListener('success', () => connections.push(request.result));
+      return request;
+    };
+    vi.stubGlobal('indexedDB', factory);
+    vi.stubGlobal('self', { clients: { matchAll: async () => [] } });
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('reopens after the browser closes the connection', async () => {
+    const tm = new TokenManager();
+    await tm.setToken({ access_token: 'tok-1', expires_at: Date.now() + 3600_000 });
+    // fake-indexeddb types the parameter as the IDBDatabase constructor.
+    fakeIndexedDB.forceCloseDatabase(connections[0] as unknown as typeof IDBDatabase);
+
+    await tm.setToken({ access_token: 'tok-2', expires_at: Date.now() + 3600_000 });
+
+    expect(await new TokenManager().getToken()).toBe('tok-2');
+  });
+
+  it('closes its connection instead of blocking a newer version of the store', async () => {
+    const tm = new TokenManager();
+    await tm.setToken({ access_token: 'tok-1', expires_at: Date.now() + 3600_000 });
+
+    const upgraded = openDB('asset-security-auth', 2);
+    const outcome = await Promise.race([
+      upgraded.then(() => 'opened'),
+      new Promise((resolve) => setTimeout(() => resolve('blocked'), 200)),
+    ]);
+
+    expect(outcome).toBe('opened');
+    (await upgraded).close();
+  });
+});

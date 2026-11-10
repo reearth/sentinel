@@ -32,18 +32,28 @@ export class TokenManager implements ITokenManager {
 
   /** Every caller awaits the same open, so concurrent first requests all see the connection. */
   private db(): Promise<IDBPDatabase<AuthDB>> {
-    this.dbPromise ??= openDB<AuthDB>(getIndexedDBName(), 1, {
+    if (this.dbPromise) return this.dbPromise;
+    // A failed or closed connection must not poison every later lookup until the worker restarts.
+    const forget = () => {
+      if (this.dbPromise === opening) this.dbPromise = null;
+    };
+    const opening: Promise<IDBPDatabase<AuthDB>> = openDB<AuthDB>(getIndexedDBName(), 1, {
       upgrade(db) {
         if (!db.objectStoreNames.contains('tokens')) {
           db.createObjectStore('tokens');
         }
       },
+      blocking: (_current, _blocked, event) => {
+        forget();
+        (event.target as IDBDatabase).close();
+      },
+      terminated: forget,
     }).catch((error) => {
-      // A failed open must not poison every later lookup until the worker restarts.
-      this.dbPromise = null;
+      forget();
       throw error;
     });
-    return this.dbPromise;
+    this.dbPromise = opening;
+    return opening;
   }
 
   /**
