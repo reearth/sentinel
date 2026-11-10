@@ -87,6 +87,22 @@ describe('protected tile requests stay authenticated', () => {
     expect(onTokenExpired).toHaveBeenCalled();
   }, 15_000);
 
+  it('when the server rejects an unexpired token, the page renews it and the tile is retried', async () => {
+    const page = await loadPage();
+    const onTokenExpired = vi.fn(async () => {
+      await page.updateToken({ accessToken: 'tok-rotated', expiresAt: Date.now() + DAY });
+    });
+    await page.registerAssetSecurity(visualizerConfig(onTokenExpired));
+    await page.updateToken({ accessToken: rt.validToken, expiresAt: Date.now() + DAY });
+    rt.validToken = 'tok-rotated';
+
+    const resp = await rt.fetch(TILE);
+
+    expect(onTokenExpired).toHaveBeenCalledTimes(1);
+    expect(rt.lastUpstreamAuth()).toBe('Bearer tok-rotated');
+    expect(resp.status).toBe(200);
+  });
+
   it('does not attach the token to hosts outside protectedDomains, before or after a restart', async () => {
     const page = await loadPage();
     await page.registerAssetSecurity(visualizerConfig());

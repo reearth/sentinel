@@ -13,6 +13,7 @@ export interface TokenSource {
   onTokenExpired?: () => void | Promise<void>;
   refreshThreshold: number;
   now(): number;
+  reportError?(error: unknown): void;
 }
 
 /** Shorter than the worker's 5s wait, so the worker hears "no" before it gives up on its own. */
@@ -33,9 +34,11 @@ export function forgetToken(): void {
 }
 
 /**
- * Answers the worker's token requests. Concurrent requests share one
- * onTokenExpired call, so a tile burst does not stampede the consumer's auth
- * endpoint. Never rejects.
+ * Answers the worker's token requests. REQUEST_TOKEN takes the latest fresh
+ * token; REFRESH_TOKEN means the server rejected the worker's token, so it
+ * always renews and never hands back the token the page had before.
+ * Concurrent requests share one onTokenExpired call, so a tile burst does not
+ * stampede the consumer's auth endpoint. Never rejects.
  */
 export function createTokenResponder(
   source: TokenSource,
@@ -51,29 +54,38 @@ export function createTokenResponder(
   const renew = (): Promise<void> => {
     const onTokenExpired = source.onTokenExpired;
     if (!onTokenExpired) return Promise.resolve();
-    renewal ??= Promise.resolve()
-      .then(onTokenExpired)
-      .catch(() => {})
-      .finally(() => {
-        renewal = null;
-      });
+    if (!renewal) {
+      const current: Promise<void> = Promise.resolve()
+        .then(onTokenExpired)
+        .catch((error: unknown) => source.reportError?.(error))
+        .finally(() => {
+          if (renewal === current) renewal = null;
+        });
+      renewal = current;
+    }
     return renewal;
   };
 
   return async (request) => {
-    const replyType = request.type === 'REFRESH_TOKEN' ? 'TOKEN_REFRESHED' : 'TOKEN_PROVIDED';
-    let token = fresh();
+    const refreshing = request.type === 'REFRESH_TOKEN';
+    const before = source.latest();
+    let token = refreshing ? null : fresh();
     if (!token) {
+      const pending = renew();
       let timer: ReturnType<typeof setTimeout> | undefined;
-      await Promise.race([
-        renew(),
-        new Promise<void>((resolve) => {
-          timer = setTimeout(resolve, deadlineMs);
+      const timedOut = await Promise.race([
+        pending.then(() => false),
+        new Promise<boolean>((resolve) => {
+          timer = setTimeout(() => resolve(true), deadlineMs);
         }),
       ]);
       clearTimeout(timer);
+      // A hung onTokenExpired must not hold every later request hostage.
+      if (timedOut && renewal === pending) renewal = null;
       token = fresh();
+      if (refreshing && token?.access_token === before?.access_token) token = null;
     }
-    return token ? { type: replyType, token } : { type: 'TOKEN_UNAVAILABLE' };
+    if (!token) return { type: 'TOKEN_UNAVAILABLE' };
+    return { type: refreshing ? 'TOKEN_REFRESHED' : 'TOKEN_PROVIDED', token };
   };
 }

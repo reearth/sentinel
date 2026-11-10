@@ -101,10 +101,54 @@ describe('page token responder', () => {
   });
 
   it('answers REFRESH_TOKEN with TOKEN_REFRESHED', async () => {
-    const { source: src } = source(token('tok-fresh', 3_600_000));
+    const state = source(token('tok-fresh', 3_600_000));
+    const onTokenExpired = vi.fn(async () => state.set(token('tok-new', 3_600_000)));
 
-    const reply = await createTokenResponder(src)({ type: 'REFRESH_TOKEN', refreshToken: 'r' });
+    const reply = await createTokenResponder({ ...state.source, onTokenExpired })({ type: 'REFRESH_TOKEN', refreshToken: 'r' });
 
-    expect(reply).toEqual({ type: 'TOKEN_REFRESHED', token: token('tok-fresh', 3_600_000) });
+    expect(reply).toEqual({ type: 'TOKEN_REFRESHED', token: token('tok-new', 3_600_000) });
+  });
+
+  it('REFRESH_TOKEN renews even when the page token looks fresh: the server rejected it', async () => {
+    const state = source(token('tok-rejected', 3_600_000));
+    const onTokenExpired = vi.fn(async () => state.set(token('tok-new', 3_600_000)));
+
+    const reply = await createTokenResponder({ ...state.source, onTokenExpired })({ type: 'REFRESH_TOKEN' });
+
+    expect(onTokenExpired).toHaveBeenCalledTimes(1);
+    expect(reply).toEqual({ type: 'TOKEN_REFRESHED', token: token('tok-new', 3_600_000) });
+  });
+
+  it('REFRESH_TOKEN never hands back the token the worker already had', async () => {
+    const { source: src } = source(token('tok-rejected', 3_600_000), vi.fn(async () => {}));
+
+    expect(await createTokenResponder(src)({ type: 'REFRESH_TOKEN' })).toEqual({ type: 'TOKEN_UNAVAILABLE' });
+  });
+
+  it('a renewal that hangs past the deadline does not block the next request', async () => {
+    vi.useFakeTimers();
+    const state = source(null);
+    const onTokenExpired = vi
+      .fn<() => Promise<void>>()
+      .mockImplementationOnce(() => new Promise<void>(() => {}))
+      .mockImplementationOnce(async () => state.set(token('tok-new', 3_600_000)));
+    const respond = createTokenResponder({ ...state.source, onTokenExpired });
+
+    const first = respond({ type: 'REQUEST_TOKEN' });
+    await vi.advanceTimersByTimeAsync(TOKEN_REPLY_DEADLINE_MS);
+    expect(await first).toEqual({ type: 'TOKEN_UNAVAILABLE' });
+
+    expect(await respond({ type: 'REQUEST_TOKEN' })).toEqual({ type: 'TOKEN_PROVIDED', token: token('tok-new', 3_600_000) });
+    expect(onTokenExpired).toHaveBeenCalledTimes(2);
+  });
+
+  it('reports an onTokenExpired failure instead of swallowing it silently', async () => {
+    const failure = new Error('auth down');
+    const reportError = vi.fn();
+    const { source: src } = source(null, () => Promise.reject(failure));
+
+    await createTokenResponder({ ...src, reportError })({ type: 'REQUEST_TOKEN' });
+
+    expect(reportError).toHaveBeenCalledWith(failure);
   });
 });

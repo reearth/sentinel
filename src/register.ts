@@ -111,6 +111,7 @@ export async function registerAssetSecurity(
       onTokenExpired: resolved.onTokenExpired,
       refreshThreshold: resolved.tokenConfig?.refreshThreshold ?? DEFAULT_REFRESH_THRESHOLD,
       now: () => Date.now(),
+      reportError: (error) => debugError('[AssetSecurity] onTokenExpired failed:', error),
     });
     ensureMessageListener();
 

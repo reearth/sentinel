@@ -1,6 +1,6 @@
 import { openDB, DBSchema, IDBPDatabase } from 'idb';
 import type { Token, TokenStorageEntry, TokenManager as ITokenManager } from './types';
-import { CONFIG, debugError, debugLog, getIndexedDBName } from './config';
+import { debugError, debugLog, getIndexedDBName } from './config';
 
 interface AuthDB extends DBSchema {
   tokens: {
@@ -66,12 +66,6 @@ export class TokenManager implements ITokenManager {
         this.memoryCache = dbToken;
         return dbToken.token;
       }
-
-      // Check if token needs refresh
-      if (dbToken && this.shouldRefresh(dbToken)) {
-        debugLog('[TokenManager] Token needs refresh');
-        return await this.refreshToken();
-      }
     } catch (error) {
       debugError('[TokenManager] Error accessing IndexedDB:', error);
     }
@@ -104,19 +98,13 @@ export class TokenManager implements ITokenManager {
   }
 
   /**
-   * Refresh token using refresh token
+   * The server rejected the current token: ask the page for a different one.
    */
   async refreshToken(): Promise<string | null> {
     debugLog('[TokenManager] Refreshing token...');
 
     try {
-      // Get current token with refresh token
       const current = this.memoryCache || await (await this.db()).get('tokens', 'current');
-
-      if (!current?.refreshToken) {
-        debugLog('[TokenManager] No refresh token available');
-        return await this.requestFreshToken();
-      }
 
       // Send message to main thread to refresh token
       const clients = await (self as any).clients.matchAll();
@@ -140,7 +128,7 @@ export class TokenManager implements ITokenManager {
         clients[0].postMessage(
           {
             type: 'REFRESH_TOKEN',
-            refreshToken: current.refreshToken
+            refreshToken: current?.refreshToken
           },
           [messageChannel.port2]
         );
@@ -176,15 +164,6 @@ export class TokenManager implements ITokenManager {
 
     const now = Date.now();
     return now >= entry.expiry;
-  }
-
-  /**
-   * Check if token should be refreshed (approaching expiry)
-   */
-  private shouldRefresh(entry: TokenStorageEntry): boolean {
-    const now = Date.now();
-    const timeUntilExpiry = entry.expiry - now;
-    return timeUntilExpiry <= CONFIG.token.refreshThreshold;
   }
 
   /**
