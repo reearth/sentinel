@@ -1,5 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import * as fakeIndexedDB from 'fake-indexeddb';
+import { openDB } from 'idb';
 import { TokenManager, TOKEN_ACQUISITION_BACKOFF_MS } from './token-manager.js';
+import { WORKER_TOKEN_WAIT_MS } from './token-provider.js';
+import { configure } from './config.js';
+import { toRuntimeConfig } from './runtime-config.js';
+
+function runtime(namespace: string) {
+  return toRuntimeConfig({ proxyUrl: 'https://p.example.com', protectedDomains: ['a.example.com'], namespace, debug: false });
+}
 
 /**
  * Fake SW clients list. `respond` controls whether the page answers the
@@ -23,6 +32,72 @@ function fakeClients(respond: 'token' | 'silent') {
     clients: { matchAll: async () => [{ postMessage }] },
   };
 }
+
+type Answer = 'token' | 'silent' | 'unavailable';
+
+function windowClient(answer: Answer, accessToken = 'tok-123') {
+  return {
+    type: 'window',
+    postMessage: vi.fn((message: { type?: string }, ports?: MessagePort[]) => {
+      const reply = message.type === 'REFRESH_TOKEN' ? 'TOKEN_REFRESHED' : 'TOKEN_PROVIDED';
+      if (answer === 'token') {
+        ports?.[0]?.postMessage({ type: reply, token: { access_token: accessToken, expires_at: Date.now() + 3600_000 } });
+      } else if (answer === 'unavailable') {
+        ports?.[0]?.postMessage({ type: 'TOKEN_UNAVAILABLE' });
+      }
+    }),
+  };
+}
+
+describe('TokenManager asks every window client', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.useRealTimers();
+  });
+
+  it.each<[string, Answer]>([
+    ['never answers', 'silent'],
+    ['answers TOKEN_UNAVAILABLE', 'unavailable'],
+  ])('takes the token from the second tab when the first %s', async (_label, first) => {
+    vi.useFakeTimers();
+    const clients = [windowClient(first), windowClient('token')];
+    const matchAll = vi.fn(async () => clients);
+    vi.stubGlobal('self', { clients: { matchAll } });
+
+    expect(await new TokenManager().getToken()).toBe('tok-123');
+    expect(matchAll).toHaveBeenCalledWith({ type: 'window' });
+  });
+
+  it('gives up at the overall deadline when no tab answers', async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal('self', { clients: { matchAll: async () => [windowClient('silent'), windowClient('silent')] } });
+
+    let token: string | null | undefined;
+    new TokenManager().getToken().then((t) => (token = t));
+    await vi.advanceTimersByTimeAsync(WORKER_TOKEN_WAIT_MS - 1);
+    expect(token).toBeUndefined();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(token).toBeNull();
+  });
+
+  it('TOKEN_UNAVAILABLE from every tab ends the wait at once', async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal('self', { clients: { matchAll: async () => [windowClient('unavailable'), windowClient('unavailable')] } });
+
+    expect(await new TokenManager().getToken()).toBeNull();
+  });
+
+  it('concurrent refreshes share one REFRESH_TOKEN round trip', async () => {
+    const client = windowClient('token', 'tok-new');
+    vi.stubGlobal('self', { clients: { matchAll: async () => [client] } });
+
+    const tm = new TokenManager();
+    const tokens = await Promise.all([tm.refreshToken(), tm.refreshToken(), tm.refreshToken()]);
+
+    expect(tokens).toEqual(['tok-new', 'tok-new', 'tok-new']);
+    expect(client.postMessage).toHaveBeenCalledTimes(1);
+  });
+});
 
 describe('TokenManager fresh-token acquisition', () => {
   beforeEach(() => {
@@ -70,6 +145,54 @@ describe('TokenManager fresh-token acquisition', () => {
     expect(fake.postMessage).toHaveBeenCalledTimes(2);
   });
 
+  it('a failed token-store open is retried on the next lookup instead of failing forever', async () => {
+    vi.useRealTimers();
+    for (const name of ['IDBCursor', 'IDBCursorWithValue', 'IDBDatabase', 'IDBFactory', 'IDBIndex',
+      'IDBKeyRange', 'IDBObjectStore', 'IDBOpenDBRequest', 'IDBRequest', 'IDBTransaction',
+      'IDBVersionChangeEvent'] as const) {
+      vi.stubGlobal(name, fakeIndexedDB[name]);
+    }
+    const factory = new fakeIndexedDB.IDBFactory();
+    vi.stubGlobal('indexedDB', factory);
+    const seeded = await openDB('asset-security-auth', 1, {
+      upgrade: (db) => db.createObjectStore('tokens'),
+    });
+    await seeded.put('tokens', { token: 'tok-stored', expiry: Date.now() + 3600_000 }, 'current');
+    seeded.close();
+    (await openDB('asset-security-newer', 2)).close();
+
+    let opens = 0;
+    vi.stubGlobal('indexedDB', {
+      open: (name: string, version?: number) =>
+        opens++ === 0 ? factory.open('asset-security-newer', 1) : factory.open(name, version),
+    });
+    vi.stubGlobal('self', { clients: { matchAll: async () => [] } });
+
+    const tm = new TokenManager();
+    expect(await tm.getToken()).toBeNull();
+    expect(await tm.getToken()).toBe('tok-stored');
+  });
+
+  it('a token from the page ends the backoff window', async () => {
+    let answer: Answer = 'silent';
+    const postMessage = vi.fn((message: { type?: string }, ports?: MessagePort[]) =>
+      windowClient(answer).postMessage(message, ports)
+    );
+    vi.stubGlobal('self', { clients: { matchAll: async () => [{ postMessage }] } });
+
+    const tm = new TokenManager();
+    const first = tm.getToken();
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(await first).toBeNull();
+
+    vi.useRealTimers();
+    await tm.setToken({ access_token: 'tok-short', expires_at: Date.now() + 20 });
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    answer = 'token';
+
+    expect(await tm.getToken()).toBe('tok-123');
+  });
+
   it('a provided token is served from memory afterwards — no further messages', async () => {
     const fake = fakeClients('token');
     vi.stubGlobal('self', { clients: fake.clients });
@@ -78,5 +201,69 @@ describe('TokenManager fresh-token acquisition', () => {
     expect(await tm.getToken()).toBe('tok-123');
     expect(await tm.getToken()).toBe('tok-123');
     expect(fake.postMessage).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('TokenManager token store connection', () => {
+  const IDB_INTERFACES = ['IDBCursor', 'IDBCursorWithValue', 'IDBDatabase', 'IDBFactory', 'IDBIndex',
+    'IDBKeyRange', 'IDBObjectStore', 'IDBOpenDBRequest', 'IDBRequest', 'IDBTransaction',
+    'IDBVersionChangeEvent'] as const;
+  let connections: IDBDatabase[];
+
+  beforeEach(() => {
+    for (const name of IDB_INTERFACES) vi.stubGlobal(name, fakeIndexedDB[name]);
+    const factory = new fakeIndexedDB.IDBFactory();
+    const open = factory.open.bind(factory);
+    connections = [];
+    factory.open = (name: string, version?: number) => {
+      const request = open(name, version);
+      request.addEventListener('success', () => connections.push(request.result));
+      return request;
+    };
+    vi.stubGlobal('indexedDB', factory);
+    vi.stubGlobal('self', { clients: { matchAll: async () => [] } });
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('reopens after the browser closes the connection', async () => {
+    const tm = new TokenManager();
+    await tm.setToken({ access_token: 'tok-1', expires_at: Date.now() + 3600_000 });
+    // fake-indexeddb types the parameter as the IDBDatabase constructor.
+    fakeIndexedDB.forceCloseDatabase(connections[0] as unknown as typeof IDBDatabase);
+
+    await tm.setToken({ access_token: 'tok-2', expires_at: Date.now() + 3600_000 });
+
+    expect(await new TokenManager().getToken()).toBe('tok-2');
+  });
+
+  it('follows a namespace change to that namespace\'s token store', async () => {
+    const tm = new TokenManager();
+    configure(runtime('first-app'));
+    await tm.setToken({ access_token: 'tok-first', expires_at: Date.now() + 3600_000 });
+
+    configure(runtime('second-app'));
+    await tm.setToken({ access_token: 'tok-second', expires_at: Date.now() + 3600_000 });
+
+    const stored = await openDB('second-app-auth', 1);
+    expect((await stored.get('tokens', 'current'))?.token).toBe('tok-second');
+    stored.close();
+    configure(null);
+  });
+
+  it('closes its connection instead of blocking a newer version of the store', async () => {
+    const tm = new TokenManager();
+    await tm.setToken({ access_token: 'tok-1', expires_at: Date.now() + 3600_000 });
+
+    const upgraded = openDB('asset-security-auth', 2);
+    const outcome = await Promise.race([
+      upgraded.then(() => 'opened'),
+      new Promise((resolve) => setTimeout(() => resolve('blocked'), 200)),
+    ]);
+
+    expect(outcome).toBe('opened');
+    (await upgraded).close();
   });
 });

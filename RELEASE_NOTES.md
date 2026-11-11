@@ -1,3 +1,30 @@
+## v0.2.0
+
+**Who is affected: every app that uses Sentinel.** Upgrade and call
+`registerAssetSecurity()` as before. The host must serve the service worker
+script when its URL carries a query string, as static hosts do by default.
+
+Browsers stop an idle service worker after about 30 s. The worker kept its
+configuration only in memory, so after a restart it intercepted nothing, and
+protected requests went out without `Authorization`. Map tiles came back 401
+and stayed blurry until a reload. The configuration now travels in the service
+worker's script URL (`/sw.js?sentinel=…`), which the browser restores on every
+start. Existing `/sw.js` registrations move to the new URL on the next
+`registerAssetSecurity()` call. A changed configuration installs a new worker.
+
+The page now answers the worker's token requests, from the latest
+`updateToken()` token or by awaiting `onTokenExpired`. Before, each miss
+stalled for 5 s and then went out unauthenticated. When the server rejects a
+token, the page is asked for a different one, and every open tab is asked, so
+a tab on an older library no longer blocks the others.
+
+The token is now attached only to protected domains and their subdomains. A
+substring match had also sent it to hosts such as
+`tiles.example.com.attacker.net`.
+
+`extractAssetId` and `tokenConfig.memoryCacheTTL` are deprecated and ignored.
+Passing `extractAssetId` used to make registration fail.
+
 ## v0.1.3
 
 **Who is affected: apps that load many protected tiles at once, and apps that

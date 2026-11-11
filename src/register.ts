@@ -5,12 +5,22 @@ import type {
   RegistrationResult,
   SecurityEvent,
 } from './public-types.js';
+import { decodeRuntimeConfig, serviceWorkerScriptUrl, toRuntimeConfig } from './runtime-config.js';
+import {
+  createTokenResponder,
+  forgetToken,
+  latestToken,
+  type TokenReply,
+  type TokenRequest,
+} from './token-provider.js';
 
 // Global state
 let swRegistration: ServiceWorkerRegistration | null = null;
 let config: AssetSecurityConfig | null = null;
 let eventListeners: Set<(event: SecurityEvent) => void> = new Set();
+let answerTokenRequest: ((request: TokenRequest) => Promise<TokenReply>) | null = null;
 const DEFAULT_SERVICE_WORKER_CONTROL_TIMEOUT = 5000;
+const DEFAULT_REFRESH_THRESHOLD = 60_000;
 
 // Debug logging for the page side. The service worker has its own helpers in
 // config.ts; this code runs in the page and reads the page-side config, so it
@@ -74,7 +84,7 @@ export async function registerAssetSecurity(
     }
 
     // Merge with defaults - ensure all optional fields have values
-    config = {
+    const resolved = {
       ...userConfig,
       namespace: userConfig.namespace ?? 'asset-security',
       scope: userConfig.scope ?? '/',
@@ -83,68 +93,43 @@ export async function registerAssetSecurity(
         userConfig.serviceWorkerControlTimeout ?? DEFAULT_SERVICE_WORKER_CONTROL_TIMEOUT,
       debug: userConfig.debug ?? false,
     };
+    config = resolved;
 
     // Register event listeners
     if (config.onSecurityEvent) {
       eventListeners.add(config.onSecurityEvent);
     }
 
-    debugLog('[AssetSecurity] Registering with config:', config);
-
-    // Check if already registered
-    const existingRegistration = await navigator.serviceWorker.getRegistration(
-      config.scope
-    );
-
-    if (existingRegistration) {
-      swRegistration = existingRegistration;
-
-      debugLog('[AssetSecurity] Service worker already registered');
-
-      // Send configuration to existing service worker
-      await waitForServiceWorkerActive(existingRegistration);
-      await sendConfigToServiceWorker();
-      await waitForServiceWorkerControl(
-        existingRegistration,
-        config.serviceWorkerControlTimeout
-      );
-
-      emitEvent({
-        type: 'registration:success',
-        timestamp: Date.now(),
-        data: { existing: true },
-      });
-
-      return { success: true, registration: existingRegistration };
+    if (config.extractAssetId) {
+      debugWarn('[AssetSecurity] extractAssetId is deprecated and ignored: functions cannot reach the service worker');
     }
 
-    // Register new service worker (serviceWorkerPath is guaranteed by defaults above)
-    swRegistration = await navigator.serviceWorker.register(
-      config.serviceWorkerPath!,
-      {
-        scope: config.scope!,
-      }
-    );
+    debugLog('[AssetSecurity] Registering with config:', config);
 
-    debugLog('[AssetSecurity] Service worker registered successfully');
+    answerTokenRequest = createTokenResponder({
+      latest: latestToken,
+      onTokenExpired: resolved.onTokenExpired,
+      refreshThreshold: resolved.tokenConfig?.refreshThreshold ?? DEFAULT_REFRESH_THRESHOLD,
+      now: () => Date.now(),
+      reportError: (error) => debugError('[AssetSecurity] onTokenExpired failed:', error),
+    });
+    ensureMessageListener();
 
-    // Wait for service worker to become active
-    await waitForServiceWorkerActive(swRegistration);
+    const scriptUrl = serviceWorkerScriptUrl(resolved.serviceWorkerPath, toRuntimeConfig(resolved));
+    if (!decodeRuntimeConfig(scriptUrl.slice(scriptUrl.indexOf('?')))) {
+      throw new Error('The service worker could not read back this configuration');
+    }
 
-    // Send configuration to service worker
-    await sendConfigToServiceWorker();
-    await waitForServiceWorkerControl(
-      swRegistration,
-      config.serviceWorkerControlTimeout
-    );
+    const existing = !!navigator.serviceWorker.controller;
+    swRegistration = await navigator.serviceWorker.register(scriptUrl, { scope: resolved.scope });
 
-    // Set up message listener from service worker
-    setupMessageListener();
+    await waitForNewestWorkerActive(swRegistration, scriptUrl, resolved.serviceWorkerControlTimeout);
+    await waitForServiceWorkerControl(swRegistration, resolved.serviceWorkerControlTimeout);
 
     emitEvent({
       type: 'registration:success',
       timestamp: Date.now(),
-      data: { existing: false },
+      data: { existing },
     });
 
     return { success: true, registration: swRegistration };
@@ -183,6 +168,8 @@ export async function unregisterAssetSecurity(): Promise<boolean> {
       debugLog('[AssetSecurity] Service worker unregistered');
       swRegistration = null;
       config = null;
+      answerTokenRequest = null;
+      forgetToken();
       eventListeners.clear();
     }
 
@@ -209,28 +196,40 @@ export function getConfig(): AssetSecurityConfig | null {
 
 // Internal helpers
 
-async function waitForServiceWorkerActive(
-  registration: ServiceWorkerRegistration
+/**
+ * Waits for the newest worker, not just any active one: when the script URL
+ * changed, register() resolves while the new worker is still installing and
+ * the old, differently configured one is still active.
+ */
+async function waitForNewestWorkerActive(
+  registration: ServiceWorkerRegistration,
+  scriptUrl: string,
+  timeoutMs: number
 ): Promise<void> {
-  return new Promise((resolve) => {
-    if (registration.active) {
-      resolve();
-      return;
-    }
+  const worker = registration.installing ?? registration.waiting ?? registration.active;
+  if (!worker || worker.state === 'activated') return;
 
-    const worker = registration.installing || registration.waiting;
-    if (!worker) {
-      resolve();
-      return;
-    }
-
-    worker.addEventListener('statechange', function onStateChange() {
-      if (worker.state === 'activated') {
-        worker.removeEventListener('statechange', onStateChange);
-        resolve();
-      }
-    });
+  const activated = await new Promise<boolean>((resolve) => {
+    const finish = (result: boolean) => {
+      clearTimeout(timer);
+      worker.removeEventListener('statechange', onStateChange);
+      resolve(result);
+    };
+    const onStateChange = () => {
+      if (worker.state === 'activated') finish(true);
+      else if (worker.state === 'redundant') finish(false);
+    };
+    const timer = setTimeout(() => finish(false), timeoutMs);
+    worker.addEventListener('statechange', onStateChange);
   });
+  if (activated) return;
+
+  const expected = new URL(scriptUrl, globalThis.location?.href ?? registration.scope).href;
+  if (registration.active?.scriptURL !== expected) {
+    throw new Error(
+      `The service worker for this configuration failed to install or did not activate within ${timeoutMs} ms`
+    );
+  }
 }
 
 async function waitForServiceWorkerControl(
@@ -295,31 +294,11 @@ async function waitForServiceWorkerControl(
   });
 }
 
-async function sendConfigToServiceWorker(): Promise<void> {
-  if (!swRegistration?.active || !config) {
-    return;
-  }
+let listening = false;
 
-  // Send configuration to service worker
-  swRegistration.active.postMessage({
-    type: 'CONFIG',
-    payload: {
-      namespace: config.namespace,
-      protectedDomains: config.protectedDomains,
-      assetPatterns: config.assetPatterns,
-      extractAssetId: config.extractAssetId,
-      tokenConfig: config.tokenConfig,
-      cacheStrategies: config.cacheStrategies,
-      api: {
-        proxyEndpoint: config.proxyUrl,
-      },
-      debug: config.debug,
-    },
-  });
-}
-
-function setupMessageListener(): void {
-  if (!config) return;
+function ensureMessageListener(): void {
+  if (listening) return;
+  listening = true;
 
   navigator.serviceWorker.addEventListener('message', (event) => {
     const { type, payload } = event.data;
@@ -327,6 +306,17 @@ function setupMessageListener(): void {
     debugLog('[AssetSecurity] Message from SW:', type, payload);
 
     switch (type) {
+      case 'REQUEST_TOKEN':
+      case 'REFRESH_TOKEN': {
+        const port = event.ports[0];
+        if (!port) break;
+        const unavailable: TokenReply = { type: 'TOKEN_UNAVAILABLE' };
+        (answerTokenRequest?.(event.data) ?? Promise.resolve(unavailable)).then((reply) =>
+          port.postMessage(reply)
+        );
+        break;
+      }
+
       case 'TOKEN_EXPIRED':
         if (config?.onTokenExpired) {
           config.onTokenExpired();

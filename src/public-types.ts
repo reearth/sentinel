@@ -37,8 +37,8 @@ export interface AssetSecurityConfig {
 
   /**
    * Custom function to extract asset ID from URL (OPTIONAL)
-   * Useful if your URLs have a specific structure
-   * @example (url) => url.pathname.match(/\/assets\/([^/]+)/)?.[1] ?? null
+   * @deprecated Ignored. A function cannot be sent to the service worker, and
+   * passing one used to make registration fail.
    */
   extractAssetId?: (url: URL) => string | null;
 
@@ -54,8 +54,8 @@ export interface AssetSecurityConfig {
    */
   tokenConfig?: {
     /**
-     * Memory cache TTL in milliseconds
-     * @default 300000 (5 minutes)
+     * Ignored. The service worker keeps a token in memory until it expires.
+     * @deprecated Kept so existing configs still type-check.
      */
     memoryCacheTTL?: number;
 

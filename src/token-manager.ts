@@ -1,6 +1,9 @@
 import { openDB, DBSchema, IDBPDatabase } from 'idb';
 import type { Token, TokenStorageEntry, TokenManager as ITokenManager } from './types';
-import { CONFIG, debugError, debugLog, getIndexedDBName } from './config';
+import { debugError, debugLog, getIndexedDBName } from './config';
+import { WORKER_TOKEN_WAIT_MS } from './token-provider';
+
+declare const self: ServiceWorkerGlobalScope;
 
 interface AuthDB extends DBSchema {
   tokens: {
@@ -20,35 +23,41 @@ export const TOKEN_ACQUISITION_BACKOFF_MS = 15_000;
 
 export class TokenManager implements ITokenManager {
   private memoryCache: TokenStorageEntry | null = null;
-  private db: IDBPDatabase<AuthDB> | null = null;
   private dbPromise: Promise<IDBPDatabase<AuthDB>> | null = null;
+  private dbName = '';
 
   /** Shared in-flight fresh-token request — the SW is a single context,
    *  so concurrent intercepted requests await one round trip instead of
    *  each messaging the page separately. */
   private inFlightAcquisition: Promise<string | null> | null = null;
+  private inFlightRefresh: Promise<string | null> | null = null;
   private lastAcquisitionFailureAt = 0;
 
-  constructor() {
-    // Don't initialize DB in constructor - let it be lazy loaded
-    // This ensures config/namespace is set first
-  }
-
-  /**
-   * Initialize IndexedDB connection
-   */
-  private async initDB(): Promise<void> {
-    if (this.dbPromise) return;
-
-    this.dbPromise = openDB<AuthDB>(getIndexedDBName(), 1, {
+  private db(): Promise<IDBPDatabase<AuthDB>> {
+    const name = getIndexedDBName();
+    if (this.dbPromise && this.dbName === name) return this.dbPromise;
+    this.dbPromise?.then((db) => db.close(), () => {});
+    this.dbName = name;
+    const forgetConnection = () => {
+      if (this.dbPromise === opening) this.dbPromise = null;
+    };
+    const opening: Promise<IDBPDatabase<AuthDB>> = openDB<AuthDB>(name, 1, {
       upgrade(db) {
         if (!db.objectStoreNames.contains('tokens')) {
           db.createObjectStore('tokens');
         }
       },
+      blocking: (_current, _blocked, event) => {
+        forgetConnection();
+        (event.target as IDBDatabase).close();
+      },
+      terminated: forgetConnection,
+    }).catch((error) => {
+      forgetConnection();
+      throw error;
     });
-
-    this.db = await this.dbPromise;
+    this.dbPromise = opening;
+    return opening;
   }
 
   /**
@@ -65,20 +74,13 @@ export class TokenManager implements ITokenManager {
 
     // 2. Check IndexedDB
     try {
-      await this.initDB();
-      const dbToken = await this.db!.get('tokens', 'current');
+      const dbToken = await (await this.db()).get('tokens', 'current');
 
       if (dbToken && !this.isTokenExpired(dbToken)) {
         debugLog('[TokenManager] Token found in IndexedDB');
         // Update memory cache
         this.memoryCache = dbToken;
         return dbToken.token;
-      }
-
-      // Check if token needs refresh
-      if (dbToken && this.shouldRefresh(dbToken)) {
-        debugLog('[TokenManager] Token needs refresh');
-        return await this.refreshToken();
       }
     } catch (error) {
       debugError('[TokenManager] Error accessing IndexedDB:', error);
@@ -101,66 +103,33 @@ export class TokenManager implements ITokenManager {
 
     // Update memory cache
     this.memoryCache = entry;
+    this.lastAcquisitionFailureAt = 0;
 
     // Store in IndexedDB
     try {
-      await this.initDB();
-      await this.db!.put('tokens', entry, 'current');
+      await (await this.db()).put('tokens', entry, 'current');
       debugLog('[TokenManager] Token stored successfully');
     } catch (error) {
       debugError('[TokenManager] Error storing token:', error);
     }
   }
 
-  /**
-   * Refresh token using refresh token
-   */
-  async refreshToken(): Promise<string | null> {
+  refreshToken(): Promise<string | null> {
+    this.inFlightRefresh ??= this.askForRefresh().finally(() => {
+      this.inFlightRefresh = null;
+    });
+    return this.inFlightRefresh;
+  }
+
+  private async askForRefresh(): Promise<string | null> {
     debugLog('[TokenManager] Refreshing token...');
-
+    let refreshToken: string | undefined;
     try {
-      // Get current token with refresh token
-      const current = this.memoryCache || await this.db?.get('tokens', 'current');
-
-      if (!current?.refreshToken) {
-        debugLog('[TokenManager] No refresh token available');
-        return await this.requestFreshToken();
-      }
-
-      // Send message to main thread to refresh token
-      const clients = await (self as any).clients.matchAll();
-      if (clients.length === 0) {
-        debugLog('[TokenManager] No clients available for token refresh');
-        return null;
-      }
-
-      return new Promise((resolve) => {
-        const messageChannel = new MessageChannel();
-
-        messageChannel.port1.onmessage = async (event) => {
-          if (event.data.type === 'TOKEN_REFRESHED' && event.data.token) {
-            await this.setToken(event.data.token);
-            resolve(event.data.token.access_token);
-          } else {
-            resolve(null);
-          }
-        };
-
-        clients[0].postMessage(
-          {
-            type: 'REFRESH_TOKEN',
-            refreshToken: current.refreshToken
-          },
-          [messageChannel.port2]
-        );
-
-        // Timeout after 5 seconds
-        setTimeout(() => resolve(null), 5000);
-      });
+      refreshToken = (this.memoryCache ?? await (await this.db()).get('tokens', 'current'))?.refreshToken;
     } catch (error) {
-      debugError('[TokenManager] Error refreshing token:', error);
-      return null;
+      debugError('[TokenManager] Error reading the refresh token:', error);
     }
+    return this.askClients({ type: 'REFRESH_TOKEN', refreshToken }, 'TOKEN_REFRESHED');
   }
 
   /**
@@ -170,8 +139,7 @@ export class TokenManager implements ITokenManager {
     this.memoryCache = null;
 
     try {
-      await this.initDB();
-      await this.db!.delete('tokens', 'current');
+      await (await this.db()).delete('tokens', 'current');
       debugLog('[TokenManager] Tokens cleared');
     } catch (error) {
       debugError('[TokenManager] Error clearing tokens:', error);
@@ -189,15 +157,6 @@ export class TokenManager implements ITokenManager {
   }
 
   /**
-   * Check if token should be refreshed (approaching expiry)
-   */
-  private shouldRefresh(entry: TokenStorageEntry): boolean {
-    const now = Date.now();
-    const timeUntilExpiry = entry.expiry - now;
-    return timeUntilExpiry <= CONFIG.token.refreshThreshold;
-  }
-
-  /**
    * Request a fresh token from the main thread — single-flight, with a
    * backoff window after an unanswered request (see
    * TOKEN_ACQUISITION_BACKOFF_MS).
@@ -208,7 +167,7 @@ export class TokenManager implements ITokenManager {
       return null;
     }
 
-    this.inFlightAcquisition ??= this.requestTokenFromClients()
+    this.inFlightAcquisition ??= this.askClients({ type: 'REQUEST_TOKEN' }, 'TOKEN_PROVIDED')
       .then((token) => {
         if (!token) {
           this.lastAcquisitionFailureAt = Date.now();
@@ -222,39 +181,46 @@ export class TokenManager implements ITokenManager {
     return this.inFlightAcquisition;
   }
 
-  private async requestTokenFromClients(): Promise<string | null> {
+  private async askClients(
+    message: { type: 'REQUEST_TOKEN' } | { type: 'REFRESH_TOKEN'; refreshToken?: string },
+    accept: 'TOKEN_PROVIDED' | 'TOKEN_REFRESHED'
+  ): Promise<string | null> {
     try {
-      const clients = await (self as any).clients.matchAll();
+      const clients: readonly Client[] = await self.clients.matchAll({ type: 'window' });
       if (clients.length === 0) {
         debugLog('[TokenManager] No clients available');
         return null;
       }
 
-      return new Promise((resolve) => {
-        const messageChannel = new MessageChannel();
-
-        messageChannel.port1.onmessage = async (event) => {
-          if (event.data.type === 'TOKEN_PROVIDED' && event.data.token) {
-            await this.setToken(event.data.token);
-            resolve(event.data.token.access_token);
-          } else {
-            resolve(null);
-          }
+      const token = await new Promise<Token | null>((resolve) => {
+        let unanswered = clients.length;
+        const channels: MessageChannel[] = [];
+        const finish = (result: Token | null) => {
+          clearTimeout(timer);
+          channels.forEach((channel) => channel.port1.close());
+          resolve(result);
         };
-
-        clients[0].postMessage(
-          { type: 'REQUEST_TOKEN' },
-          [messageChannel.port2]
-        );
-
-        // Timeout after 5 seconds
-        setTimeout(() => {
+        const timer = setTimeout(() => {
           debugLog('[TokenManager] Token request timeout');
-          resolve(null);
-        }, 5000);
+          finish(null);
+        }, WORKER_TOKEN_WAIT_MS);
+
+        for (const client of clients) {
+          const channel = new MessageChannel();
+          channels.push(channel);
+          channel.port1.onmessage = (event) => {
+            if (event.data?.type === accept && event.data.token) finish(event.data.token);
+            else if (--unanswered === 0) finish(null);
+          };
+          client.postMessage(message, [channel.port2]);
+        }
       });
+
+      if (!token) return null;
+      await this.setToken(token);
+      return token.access_token;
     } catch (error) {
-      debugError('[TokenManager] Error requesting fresh token:', error);
+      debugError('[TokenManager] Error requesting token from clients:', error);
       return null;
     }
   }

@@ -3,14 +3,24 @@ import { tokenManager } from './token-manager';
 import { requestInterceptor } from './request-interceptor';
 import { handleRequest } from './strategies';
 import {
+  configure,
   debugLog,
   debugWarn,
   getCacheName,
-  updateConfig,
+  isStaleCacheName,
 } from './config';
+import { CONFIG_PARAM, decodeRuntimeConfig, parseLegacyConfigMessage } from './runtime-config';
 import type { ServiceWorkerMessage, Token } from './types';
 
 declare const self: ServiceWorkerGlobalScope;
+
+const urlConfig = decodeRuntimeConfig(self.location.search);
+if (!urlConfig && new URLSearchParams(self.location.search).has(CONFIG_PARAM)) {
+  console.warn(
+    `[ServiceWorker] The "${CONFIG_PARAM}" config in the script URL is unreadable; protected requests will not be authenticated`
+  );
+}
+configure(urlConfig);
 
 /**
  * Service Worker installation
@@ -29,14 +39,8 @@ self.addEventListener('activate', (event) => {
 
   event.waitUntil(
     (async () => {
-      const currentCacheName = getCacheName();
-      // Clean up old caches (keep only current version)
       const cacheNames = await caches.keys();
-      await Promise.all(
-        cacheNames
-          .filter((name) => name !== currentCacheName)
-          .map((name) => caches.delete(name))
-      );
+      await Promise.all(cacheNames.filter(isStaleCacheName).map((name) => caches.delete(name)));
 
       // Claim all clients
       await self.clients.claim();
@@ -70,19 +74,28 @@ self.addEventListener('fetch', (event) => {
 /**
  * Handle messages from the main thread
  */
-self.addEventListener('message', async (event) => {
+self.addEventListener('message', (event) => {
+  // Without waitUntil the browser may terminate the worker mid IndexedDB write.
+  event.waitUntil(handleMessage(event));
+});
+
+async function handleMessage(event: ExtendableMessageEvent): Promise<void> {
   const message = event.data as ServiceWorkerMessage;
 
   debugLog('[ServiceWorker] Received message:', message.type);
 
   switch (message.type) {
-    case 'CONFIG':
-      // Update service worker configuration
-      if (message.payload) {
-        updateConfig(message.payload);
-        event.ports[0]?.postMessage({ success: true });
+    case 'CONFIG': {
+      if (urlConfig) {
+        debugWarn('[ServiceWorker] Ignoring CONFIG message: config travels in the script URL');
+        break;
       }
+      const legacy = parseLegacyConfigMessage(message.payload);
+      if (legacy) configure(legacy);
+      else debugWarn('[ServiceWorker] Ignoring unreadable CONFIG message');
+      event.ports[0]?.postMessage({ success: !!legacy });
       break;
+    }
 
     case 'UPDATE_TOKEN':
       if (message.payload?.token) {
@@ -114,7 +127,7 @@ self.addEventListener('message', async (event) => {
     default:
       debugWarn('[ServiceWorker] Unknown message type:', message.type);
   }
-});
+}
 
 /**
  * Clear all caches
