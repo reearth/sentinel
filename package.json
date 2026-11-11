@@ -54,7 +54,7 @@
     "fake-indexeddb": "^6.2.8",
     "typescript": "^7.0.2",
     "vite": "^8.1.5",
-    "vitest": "^4.1.10"
+    "vitest": "^5.1.0"
   },
   "dependencies": {
     "idb": "^8.0.0",
