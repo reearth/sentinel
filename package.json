@@ -1,6 +1,6 @@
 {
   "name": "@reearth/sentinel",
-  "version": "0.1.3",
+  "version": "0.2.0",
   "description": "Service worker library for secure asset access with transparent authentication",
   "type": "module",
   "main": "./dist/index.js",
