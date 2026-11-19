@@ -23,6 +23,7 @@ const DEFAULT_CONFIG: ServiceWorkerConfig = {
   token: {
     indexedDBStore: 'tokens',
     refreshThreshold: 60 * 1000, // Refresh if less than 1 minute remaining
+    transport: { kind: 'header' },
   },
 
   // API endpoints - proxyEndpoint MUST be configured by the application

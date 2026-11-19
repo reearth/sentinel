@@ -1,5 +1,5 @@
 import type { AssetSecurityConfig } from './public-types.js';
-import type { CacheStrategy } from './types.js';
+import type { CacheStrategy, TokenTransport } from './types.js';
 
 /**
  * Travels in the worker's script URL: the browser persists that URL with the
@@ -12,7 +12,7 @@ export interface RuntimeConfig {
   readonly protectedDomains: readonly string[];
   readonly assetPatterns: Partial<Readonly<Record<AssetPatternKey, RegExp>>>;
   readonly proxyEndpoint: string;
-  readonly token: { readonly refreshThreshold?: number };
+  readonly token: { readonly refreshThreshold?: number; readonly transport: TokenTransport };
   readonly cacheStrategies: Partial<Readonly<Record<CacheAssetKind, CacheStrategy>>>;
   readonly debug: boolean;
 }
@@ -26,6 +26,8 @@ export const CONFIG_PARAM = 'sentinel';
 const PATTERN_KEYS: readonly AssetPatternKey[] = ['customAssets', 'mvtTiles', 'rasterTiles', 'generalAssets'];
 const CACHE_KINDS: readonly CacheAssetKind[] = ['images', 'tiles', 'documents'];
 const CACHE_STRATEGIES: readonly CacheStrategy[] = ['cache-first', 'network-first', 'network-only', 'cache-only'];
+const QUERY_PARAMETER_NAME = /^[A-Za-z0-9._~-]+$/;
+const HEADER_TRANSPORT: TokenTransport = { kind: 'header' };
 
 interface WireV1 {
   v: 1;
@@ -33,7 +35,7 @@ interface WireV1 {
   d: string[];
   p: Partial<Record<AssetPatternKey, [source: string, flags: string]>>;
   x: string;
-  t?: { rt?: number };
+  t?: { rt?: number; q?: string };
   c?: Partial<Record<CacheAssetKind, CacheStrategy>>;
   dbg?: 1;
 }
@@ -47,13 +49,23 @@ export function toRuntimeConfig(
     if (pattern) assetPatterns[key] = pattern;
   }
 
-  const token: { refreshThreshold?: number } = {};
+  const token: { refreshThreshold?: number; transport: TokenTransport } = { transport: HEADER_TRANSPORT };
   const refreshThreshold = config.tokenConfig?.refreshThreshold;
   if (refreshThreshold !== undefined) {
     if (!Number.isFinite(refreshThreshold)) {
       throw new Error(`tokenConfig.refreshThreshold must be a finite number, got ${refreshThreshold}`);
     }
     token.refreshThreshold = refreshThreshold;
+  }
+  const queryParameter = config.tokenConfig?.queryParameter;
+  if (queryParameter !== undefined) {
+    const transport = queryTransport(queryParameter);
+    if (!transport) {
+      throw new Error(
+        `tokenConfig.queryParameter must be a non-empty string of A-Z a-z 0-9 - . _ ~, got ${JSON.stringify(queryParameter)}`
+      );
+    }
+    token.transport = transport;
   }
 
   const cacheStrategies: Partial<Record<CacheAssetKind, CacheStrategy>> = {};
@@ -79,7 +91,10 @@ export function encodeRuntimeConfig(config: RuntimeConfig): string {
     const pattern = config.assetPatterns[key];
     if (pattern) wire.p[key] = [pattern.source, pattern.flags];
   }
-  if (config.token.refreshThreshold !== undefined) wire.t = { rt: config.token.refreshThreshold };
+  const t: NonNullable<WireV1['t']> = {};
+  if (config.token.refreshThreshold !== undefined) t.rt = config.token.refreshThreshold;
+  if (config.token.transport.kind === 'query') t.q = config.token.transport.param;
+  if (Object.keys(t).length > 0) wire.t = t;
   const cache: Partial<Record<CacheAssetKind, CacheStrategy>> = {};
   for (const kind of CACHE_KINDS) {
     const strategy = config.cacheStrategies[kind];
@@ -128,7 +143,7 @@ export function parseLegacyConfigMessage(payload: unknown): RuntimeConfig | null
     d: payload.protectedDomains,
     p,
     x: api.proxyEndpoint,
-    t: { rt: tokenConfig.refreshThreshold },
+    t: { rt: tokenConfig.refreshThreshold, q: tokenConfig.queryParameter },
     c: payload.cacheStrategies,
     dbg: payload.debug === true ? 1 : undefined,
   });
@@ -149,7 +164,9 @@ function parseWire(wire: unknown): RuntimeConfig | null {
     assetPatterns[key] = new RegExp(entry[0], entry[1]);
   }
 
-  const token: { refreshThreshold?: number } = {};
+  const token: { refreshThreshold?: number; transport: TokenTransport } = {
+    transport: (isRecord(t) ? queryTransport(t.q) : null) ?? HEADER_TRANSPORT,
+  };
   if (isRecord(t) && Number.isFinite(t.rt)) token.refreshThreshold = t.rt as number;
 
   const cacheStrategies: Partial<Record<CacheAssetKind, CacheStrategy>> = {};
@@ -169,6 +186,10 @@ function parseWire(wire: unknown): RuntimeConfig | null {
     cacheStrategies,
     debug: dbg === 1,
   };
+}
+
+function queryTransport(name: unknown): TokenTransport | null {
+  return typeof name === 'string' && QUERY_PARAMETER_NAME.test(name) ? { kind: 'query', param: name } : null;
 }
 
 function canonicalDomains(domains: readonly string[]): string[] {

@@ -65,6 +65,20 @@ export interface AssetSecurityConfig {
      * @default 60000 (1 minute)
      */
     refreshThreshold?: number;
+
+    /**
+     * Send the token in this URL query parameter instead of an
+     * `Authorization: Bearer` header. A cross-origin GET with no custom
+     * header needs no CORS preflight, which saves a round trip per tile.
+     * The token then appears in request URLs: DevTools, browser cache keys,
+     * and server access logs. Use it only for a token that is not secret,
+     * such as one shared value already shipped in the front-end bundle.
+     * Must be a non-empty string of `A-Z a-z 0-9 - . _ ~`; anything else
+     * fails registration.
+     * @default undefined (send the `Authorization` header)
+     * @example 'token'
+     */
+    queryParameter?: string;
   };
 
   /**
