@@ -42,6 +42,7 @@ export interface ServiceWorkerConfig {
   token: {
     indexedDBStore: string;
     refreshThreshold: number;
+    transport: TokenTransport;
   };
   api: {
     tokenEndpoint: string;
@@ -60,6 +61,10 @@ export interface ServiceWorkerConfig {
 }
 
 export type CacheStrategy = 'cache-first' | 'network-first' | 'network-only' | 'cache-only';
+
+export type TokenTransport =
+  | { readonly kind: 'header' }
+  | { readonly kind: 'query'; readonly param: string };
 
 export interface SignedUrlRequest {
   assetId: string;

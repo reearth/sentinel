@@ -116,10 +116,36 @@ describe('runtime config in the service worker script URL', () => {
       protectedDomains: ['tiles.example.com'],
       assetPatterns: {},
       proxyEndpoint: 'https://tiles.example.com',
-      token: {},
+      token: { transport: { kind: 'header' } },
       cacheStrategies: { images: 'cache-first' },
       debug: false,
     });
+  });
+
+  it('round-trips a token query parameter through the script URL', () => {
+    const runtime = toRuntimeConfig({ ...visualizer, tokenConfig: { refreshThreshold: 45_000, queryParameter: 'token' } });
+    const decoded = decodeRuntimeConfig(searchOf(serviceWorkerScriptUrl('/sw.js', runtime)));
+
+    expect(decoded?.token).toEqual({ refreshThreshold: 45_000, transport: { kind: 'query', param: 'token' } });
+  });
+
+  it('without queryParameter, keeps the header and the script URL v0.2.0 registered, so upgrading does not reinstall', () => {
+    const v020ScriptUrl =
+      '/sw.js?sentinel=eyJ2IjoxLCJucyI6InJlZWFydGgtdmlzdWFsaXplciIsImQiOlsibG9jYWxob3N0OjgwODAiLCJ0aWxlcy5leGFtcGxlLmNvbSJdLCJwIjp7InJhc3RlclRpbGVzIjpbIlxcLyg_OmNlc2l1bS1tZXNofGltYWdlcnl8Z29vZ2xlM2R8djFcXC8zZHRpbGVzKVxcLyIsIiJdfSwieCI6Imh0dHBzOi8vdGlsZXMuZXhhbXBsZS5jb20iLCJ0Ijp7InJ0Ijo0NTAwMH0sImMiOnsidGlsZXMiOiJjYWNoZS1maXJzdCJ9LCJkYmciOjF9';
+    const scriptUrl = serviceWorkerScriptUrl('/sw.js', toRuntimeConfig(visualizer));
+
+    expect(scriptUrl).toBe(v020ScriptUrl);
+    expect(decodeRuntimeConfig(searchOf(scriptUrl))?.token.transport).toEqual({ kind: 'header' });
+  });
+
+  it.each(['', 'to ken', 'a&b', 'a=b', 'tök', '#'])('rejects a queryParameter of %j', (queryParameter) => {
+    expect(() => toRuntimeConfig({ ...visualizer, tokenConfig: { queryParameter } })).toThrow(/queryParameter/);
+  });
+
+  it('decodes an unusable query parameter name to the header transport', () => {
+    const wire = { v: 1, ns: 'a', d: [], p: {}, x: '', t: { q: 'a&b' } };
+
+    expect(decodeRuntimeConfig(`?${CONFIG_PARAM}=${btoa(JSON.stringify(wire))}`)?.token.transport).toEqual({ kind: 'header' });
   });
 
   it.each([NaN, Infinity, -Infinity])('rejects a refreshThreshold of %s', (refreshThreshold) => {
@@ -142,10 +168,13 @@ describe('runtime config in the service worker script URL', () => {
       protectedDomains: ['tiles.example.com'],
       assetPatterns: { rasterTiles: /\/imagery\//i },
       proxyEndpoint: 'https://tiles.example.com',
-      token: { refreshThreshold: 45_000 },
+      token: { refreshThreshold: 45_000, transport: { kind: 'header' } },
       cacheStrategies: { tiles: 'cache-first' },
       debug: true,
     });
+    expect(
+      parseLegacyConfigMessage({ ...payload, tokenConfig: { queryParameter: 'token' } })?.token.transport
+    ).toEqual({ kind: 'query', param: 'token' });
     expect(parseLegacyConfigMessage({ ...payload, namespace: undefined })).toBeNull();
     expect(parseLegacyConfigMessage({ ...payload, assetPatterns: { rasterTiles: 'imagery' } })).toBeNull();
     expect(parseLegacyConfigMessage(undefined)).toBeNull();

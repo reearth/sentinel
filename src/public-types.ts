@@ -65,6 +65,26 @@ export interface AssetSecurityConfig {
      * @default 60000 (1 minute)
      */
     refreshThreshold?: number;
+
+    /**
+     * Send the token in this URL query parameter instead of an
+     * `Authorization: Bearer` header. A cross-origin GET then needs no CORS
+     * preflight, unless the page itself set a non-safelisted header such as
+     * a custom header or `Range`. The server must accept the token under
+     * this name (Terravista reads `token`), and the app must serve the
+     * 0.3.0 `sw.js`; an older worker ignores the option.
+     * The token is part of the request URL: it shows in DevTools, browser
+     * HTTP cache keys, Cache Storage entries and `response.url`, server
+     * logs, and redirect targets that keep the query. Rotating the token
+     * makes the browser HTTP cache miss. Use it only for a token that is not
+     * secret, such as one shared value already shipped in the front-end
+     * bundle.
+     * Must be a non-empty string of `A-Z a-z 0-9 - . _ ~`; anything else
+     * fails registration.
+     * @default undefined (send the `Authorization` header)
+     * @example 'token'
+     */
+    queryParameter?: string;
   };
 
   /**

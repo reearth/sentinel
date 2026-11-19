@@ -137,6 +137,8 @@ describe('registerAssetSecurity', () => {
 
   it.each([
     ['a non-finite refreshThreshold', { tokenConfig: { refreshThreshold: NaN } }],
+    ['an empty queryParameter', { tokenConfig: { queryParameter: '' } }],
+    ['a queryParameter that is not URL-safe', { tokenConfig: { queryParameter: 'a&b' } }],
     ['an empty namespace', { namespace: '' }],
   ])('fails registration for %s instead of installing an unconfigured worker', async (_label, overrides) => {
     const onRegistrationError = vi.fn();

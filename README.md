@@ -141,6 +141,26 @@ await registerAssetSecurity({
 
 `tokenConfig.memoryCacheTTL` is ignored: the service worker keeps a token in memory until it expires. `refreshThreshold` must be a finite number; anything else fails registration.
 
+#### Sending the token in the URL
+
+By default the token goes in an `Authorization: Bearer` header. A cross-origin request with that header needs a CORS preflight (`OPTIONS`), and browsers cache a preflight per URL, so every new tile costs an extra round trip. Set `tokenConfig.queryParameter` to send the token as a URL query parameter instead:
+
+```typescript
+await registerAssetSecurity({
+  proxyUrl: 'https://tiles.example.com',
+  protectedDomains: ['tiles.example.com'],
+  tokenConfig: { queryParameter: 'token' }  // GET /tiles/1/2/3.png?token=<token>
+});
+```
+
+Protected `GET` requests then carry the token in that parameter and no `Authorization` header. A request skips the preflight only if the page itself set no headers outside the CORS safelist; a custom header or a `Range` header set by the page still triggers one. A parameter of the same name already in the URL is replaced, and the rest of the query string is sent byte for byte. The name must be a non-empty string of `A-Z a-z 0-9 - . _ ~`; anything else fails registration.
+
+The server must accept the token under that parameter name. Terravista reads `token`.
+
+If you copy `dist/sw.js` into your public folder, copy the 0.3.0 file. An older worker ignores the option and keeps sending the header.
+
+The tradeoff: the token is part of the request URL. It shows in DevTools, in the browser's HTTP cache keys, in Cache Storage entries and `response.url`, in server and proxy access logs, and in any redirect target whose `Location` keeps the query. Rotating the token changes every URL, so the browser HTTP cache misses until it refills. That is fine for a token that is not secret, such as one shared value already shipped in the front-end bundle. Keep the header for per-user secret tokens.
+
 ### Namespace Isolation
 
 Use namespaces to isolate storage for multiple apps:
@@ -189,7 +209,7 @@ When the server rejects a token with 401 or 403, the service worker asks the pag
 - `config.assetPatterns` (object, optional): Custom URL patterns
 - `config.extractAssetId` (function, deprecated): Ignored. Functions cannot be sent to the service worker
 - `config.namespace` (string, optional): Storage namespace (default: 'asset-security')
-- `config.tokenConfig` (object, optional): Token management settings
+- `config.tokenConfig` (object, optional): Token management settings: `refreshThreshold` (ms) and `queryParameter` (send the token in this URL query parameter instead of the `Authorization` header; see [Sending the token in the URL](#sending-the-token-in-the-url))
 - `config.cacheStrategies` (object, optional): Cache behavior per asset type
 - `config.serviceWorkerControlTimeout` (number, optional): Max wait in ms for the service worker to control the current page (default: 5000)
 - `config.debug` (boolean, optional): Enable debug logging for registration, service worker, token manager, and request interceptor logs (default: `false`)

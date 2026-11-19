@@ -5,6 +5,28 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] — 2026-11-19
+
+### Added
+
+- **`tokenConfig.queryParameter` sends the token in the URL instead of a
+  header.** With `queryParameter: 'token'`, protected requests carry
+  `?token=<token>` and no `Authorization` header, so a cross-origin tile
+  `GET` needs no preflight unless the page itself set a non-safelisted
+  header (a custom header or `Range`). Chrome caches a preflight per URL, so
+  before this every new tile cost an extra `OPTIONS` round trip. An existing
+  parameter of the same name is replaced; the rest of the query string is
+  kept byte for byte. The server must accept the token under that name
+  (Terravista reads `token`). Apps that copy `dist/sw.js` into their public
+  folder must copy the 0.3.0 file; an older worker ignores the option. The
+  token is part of the request URL, so it reaches DevTools, browser HTTP
+  cache keys, Cache Storage entries and `response.url`, server logs, and
+  redirect targets that keep the query, and rotating it makes the browser
+  HTTP cache miss. Use it only for a token that is not secret. Without the
+  option the token goes in the header as before, and an unchanged
+  configuration keeps its service worker script URL. An empty or
+  non-URL-safe name fails registration.
+
 ## [0.2.0] — 2026-11-10
 
 ### Fixed

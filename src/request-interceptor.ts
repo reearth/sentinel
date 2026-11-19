@@ -1,5 +1,6 @@
 import type { RequestInterceptor as IRequestInterceptor } from './types';
 import {
+  CONFIG,
   debugError,
   debugLog,
   isProtectedDomain,
@@ -8,6 +9,27 @@ import {
   getCacheName,
 } from './config';
 import { tokenManager } from './token-manager';
+
+// Edits the raw query string because URLSearchParams re-serializes every
+// pair, which breaks signed URLs and query-keyed caches.
+function withQueryParameter(href: string, name: string, value: string): string {
+  const url = new URL(href);
+  const query = url.search.slice(1);
+  const pairs = query === '' ? [] : query.split('&');
+  const kept = pairs.filter((pair) => decodeQueryName(pair) !== name);
+  kept.push(`${name}=${encodeURIComponent(value)}`);
+  url.search = kept.join('&');
+  return url.href;
+}
+
+function decodeQueryName(pair: string): string {
+  const raw = pair.split('=', 1)[0].replace(/\+/g, ' ');
+  try {
+    return decodeURIComponent(raw);
+  } catch {
+    return raw;
+  }
+}
 
 export class RequestInterceptor implements IRequestInterceptor {
   /**
@@ -31,16 +53,23 @@ export class RequestInterceptor implements IRequestInterceptor {
     return assetType !== 'unknown';
   }
 
-  /**
-   * Add authentication header to request
-   */
   addAuthentication(request: Request, token: string): Request {
     const headers = new Headers(request.headers);
-    headers.set('Authorization', `Bearer ${token}`);
+    let url = request.url;
+    const transport = CONFIG.token.transport;
+    switch (transport.kind) {
+      case 'header':
+        headers.set('Authorization', `Bearer ${token}`);
+        debugLog('[RequestInterceptor] Adding Authorization header:', `Bearer ${token.substring(0, 20)}...`);
+        break;
+      case 'query': {
+        url = withQueryParameter(request.url, transport.param, token);
+        debugLog(`[RequestInterceptor] Adding token query parameter "${transport.param}":`, `${token.substring(0, 20)}...`);
+        break;
+      }
+    }
 
-    debugLog('[RequestInterceptor] Adding Authorization header:', `Bearer ${token.substring(0, 20)}...`);
-
-    return new Request(request.url, {
+    return new Request(url, {
       method: request.method,
       headers: headers,
       body: request.body,
