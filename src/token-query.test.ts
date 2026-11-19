@@ -90,6 +90,19 @@ describe('tokenConfig.queryParameter', () => {
     expect(rt.lastUpstreamURL()?.searchParams.get('v')).toBe('2');
   });
 
+  it('keeps the other query bytes exactly as the page sent them', async () => {
+    const page = await loadPage();
+    await page.registerAssetSecurity(visualizerConfig({ queryParameter: 'token' }));
+    await page.updateToken({ accessToken: rt.validToken, expiresAt: Date.now() + DAY });
+
+    const resp = await rt.fetch(`${TILE}?bbox=139.1,35.2&flag&q=a%20b&token=old&r=~x:/y`);
+
+    expect(resp.status).toBe(200);
+    expect(rt.upstream[rt.upstream.length - 1].url).toBe(
+      `${TILE}?bbox=139.1,35.2&flag&q=a%20b&r=~x:/y&token=${rt.validToken}`,
+    );
+  });
+
   it('retries a rejected token with the renewed one in the query string', async () => {
     const page = await loadPage();
     const onTokenExpired = vi.fn(async () => {

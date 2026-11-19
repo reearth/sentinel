@@ -10,6 +10,27 @@ import {
 } from './config';
 import { tokenManager } from './token-manager';
 
+// Edits the raw query string because URLSearchParams re-serializes every
+// pair, which breaks signed URLs and query-keyed caches.
+function withQueryParameter(href: string, name: string, value: string): string {
+  const url = new URL(href);
+  const query = url.search.slice(1);
+  const pairs = query === '' ? [] : query.split('&');
+  const kept = pairs.filter((pair) => decodeQueryName(pair) !== name);
+  kept.push(`${name}=${encodeURIComponent(value)}`);
+  url.search = kept.join('&');
+  return url.href;
+}
+
+function decodeQueryName(pair: string): string {
+  const raw = pair.split('=', 1)[0].replace(/\+/g, ' ');
+  try {
+    return decodeURIComponent(raw);
+  } catch {
+    return raw;
+  }
+}
+
 export class RequestInterceptor implements IRequestInterceptor {
   /**
    * Determine if a request should be intercepted
@@ -42,9 +63,7 @@ export class RequestInterceptor implements IRequestInterceptor {
         debugLog('[RequestInterceptor] Adding Authorization header:', `Bearer ${token.substring(0, 20)}...`);
         break;
       case 'query': {
-        const withToken = new URL(request.url);
-        withToken.searchParams.set(transport.param, token);
-        url = withToken.href;
+        url = withQueryParameter(request.url, transport.param, token);
         debugLog(`[RequestInterceptor] Adding token query parameter "${transport.param}":`, `${token.substring(0, 20)}...`);
         break;
       }
