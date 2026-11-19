@@ -1,3 +1,29 @@
+## v0.3.0
+
+**Who is affected: apps that load many protected tiles from another origin.**
+Nothing changes unless you set the new option.
+
+Sentinel sends the token in an `Authorization` header. A cross-origin request
+with that header needs a CORS preflight, and Chrome caches a preflight per
+URL, so every new map tile cost an extra `OPTIONS` round trip before its
+`GET`. Set `tokenConfig.queryParameter` to send the token as a URL query
+parameter instead:
+
+```ts
+await registerAssetSecurity({
+  proxyUrl: 'https://tiles.example.com',
+  protectedDomains: ['tiles.example.com'],
+  tokenConfig: { queryParameter: 'token' },
+});
+```
+
+Protected requests then carry `?token=<token>` and no custom header, so the
+browser sends them without a preflight. The server must accept the token in
+that parameter. The token becomes visible in request URLs: DevTools, the
+browser's HTTP cache keys, and server access logs. Use it for a token that is
+not secret, such as one shared value already shipped in the front-end bundle.
+Keep the header for per-user secret tokens.
+
 ## v0.2.0
 
 **Who is affected: every app that uses Sentinel.** Upgrade and call
