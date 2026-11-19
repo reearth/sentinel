@@ -32,10 +32,6 @@ export class RequestInterceptor implements IRequestInterceptor {
     return assetType !== 'unknown';
   }
 
-  /**
-   * Attach the token as the configured transport: an Authorization header,
-   * or a URL query parameter so a cross-origin GET needs no CORS preflight
-   */
   addAuthentication(request: Request, token: string): Request {
     const headers = new Headers(request.headers);
     let url = request.url;
