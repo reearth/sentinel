@@ -17,12 +17,21 @@ await registerAssetSecurity({
 });
 ```
 
-Protected requests then carry `?token=<token>` and no custom header, so the
-browser sends them without a preflight. The server must accept the token in
-that parameter. The token becomes visible in request URLs: DevTools, the
-browser's HTTP cache keys, and server access logs. Use it for a token that is
-not secret, such as one shared value already shipped in the front-end bundle.
-Keep the header for per-user secret tokens.
+Protected requests then carry `?token=<token>` and no `Authorization`
+header, so the browser sends them without a preflight, unless the page itself
+set a non-safelisted header such as a custom header or `Range`.
+
+- The server must accept the token under that parameter name. Terravista
+  reads `token`.
+- If you copy `dist/sw.js` into your public folder, copy the 0.3.0 file. An
+  older worker ignores the option and keeps sending the header.
+- The token is part of the request URL. It shows in DevTools, the browser's
+  HTTP cache keys, Cache Storage entries and `response.url`, server logs, and
+  any redirect target whose `Location` keeps the query. Rotating the token
+  makes the browser HTTP cache miss.
+
+Use it for a token that is not secret, such as one shared value already
+shipped in the front-end bundle. Keep the header for per-user secret tokens.
 
 ## v0.2.0
 

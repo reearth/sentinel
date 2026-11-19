@@ -153,9 +153,13 @@ await registerAssetSecurity({
 });
 ```
 
-Protected `GET` requests then carry the token in that parameter and no `Authorization` header, so they are CORS simple requests and need no preflight. A parameter of the same name already in the URL is replaced. The server must accept the token in that parameter. The name must be a non-empty string of `A-Z a-z 0-9 - . _ ~`; anything else fails registration.
+Protected `GET` requests then carry the token in that parameter and no `Authorization` header. A request skips the preflight only if the page itself set no headers outside the CORS safelist; a custom header or a `Range` header set by the page still triggers one. A parameter of the same name already in the URL is replaced, and the rest of the query string is sent byte for byte. The name must be a non-empty string of `A-Z a-z 0-9 - . _ ~`; anything else fails registration.
 
-The tradeoff: the token appears in request URLs, so it shows in DevTools, in the browser's HTTP cache keys, and in server and proxy access logs. That is fine for a token that is not secret, such as one shared value already shipped in the front-end bundle. Keep the header for per-user secret tokens.
+The server must accept the token under that parameter name. Terravista reads `token`.
+
+If you copy `dist/sw.js` into your public folder, copy the 0.3.0 file. An older worker ignores the option and keeps sending the header.
+
+The tradeoff: the token is part of the request URL. It shows in DevTools, in the browser's HTTP cache keys, in Cache Storage entries and `response.url`, in server and proxy access logs, and in any redirect target whose `Location` keeps the query. Rotating the token changes every URL, so the browser HTTP cache misses until it refills. That is fine for a token that is not secret, such as one shared value already shipped in the front-end bundle. Keep the header for per-user secret tokens.
 
 ### Namespace Isolation
 
