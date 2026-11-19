@@ -1,5 +1,6 @@
 import type { RequestInterceptor as IRequestInterceptor } from './types';
 import {
+  CONFIG,
   debugError,
   debugLog,
   isProtectedDomain,
@@ -32,15 +33,28 @@ export class RequestInterceptor implements IRequestInterceptor {
   }
 
   /**
-   * Add authentication header to request
+   * Attach the token as the configured transport: an Authorization header,
+   * or a URL query parameter so a cross-origin GET needs no CORS preflight
    */
   addAuthentication(request: Request, token: string): Request {
     const headers = new Headers(request.headers);
-    headers.set('Authorization', `Bearer ${token}`);
+    let url = request.url;
+    const transport = CONFIG.token.transport;
+    switch (transport.kind) {
+      case 'header':
+        headers.set('Authorization', `Bearer ${token}`);
+        debugLog('[RequestInterceptor] Adding Authorization header:', `Bearer ${token.substring(0, 20)}...`);
+        break;
+      case 'query': {
+        const withToken = new URL(request.url);
+        withToken.searchParams.set(transport.param, token);
+        url = withToken.href;
+        debugLog(`[RequestInterceptor] Adding token query parameter "${transport.param}":`, `${token.substring(0, 20)}...`);
+        break;
+      }
+    }
 
-    debugLog('[RequestInterceptor] Adding Authorization header:', `Bearer ${token.substring(0, 20)}...`);
-
-    return new Request(request.url, {
+    return new Request(url, {
       method: request.method,
       headers: headers,
       body: request.body,

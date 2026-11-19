@@ -74,6 +74,7 @@ export class FakeServiceWorkerRuntime {
   readonly toWorker: unknown[] = [];
   idbOpens = 0;
   validToken = 'tok-valid';
+  queryTokenParam = 'token';
 
   private readonly idb = this.countingIDBFactory();
   private readonly cacheStore = new Map<string, Map<string, Response>>();
@@ -175,6 +176,11 @@ export class FakeServiceWorkerRuntime {
     clearTimeout(timer);
     await new Promise((resolve) => setTimeout(resolve, 0));
     return replies;
+  }
+
+  lastUpstreamURL(): URL | null {
+    const last = this.upstream[this.upstream.length - 1];
+    return last ? new URL(last.url) : null;
   }
 
   lastUpstreamAuth(): string | null {
@@ -286,7 +292,9 @@ export class FakeServiceWorkerRuntime {
     vi.stubGlobal('fetch', async (input: RequestInfo, init?: RequestInit) => {
       const req = new Request(input, init);
       this.upstream.push(req);
-      const ok = req.headers.get('authorization') === `Bearer ${this.validToken}`;
+      const ok =
+        req.headers.get('authorization') === `Bearer ${this.validToken}` ||
+        new URL(req.url).searchParams.get(this.queryTokenParam) === this.validToken;
       return new Response(ok ? 'tile' : 'Unauthorized', {
         status: ok ? 200 : 401,
         headers: { 'content-type': ok ? 'image/png' : 'text/plain', 'cache-control': 'no-store' },
